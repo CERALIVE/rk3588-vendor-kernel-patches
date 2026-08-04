@@ -1,0 +1,121 @@
+name: patch-apply
+
+# Trigger hygiene: `push` is constrained to branches because a `pull_request`
+# trigger exists. A bare `push:` would fire a second, duplicate run for every
+# PR-branch push, and `concurrency` does NOT dedupe that — the push event's ref
+# (refs/heads/<branch>) and the PR event's ref (refs/pull/N/merge) hash to
+# different concurrency groups.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly drift watch, answering two questions at once: has Armbian moved the
+    # rk3588 vendor branch off rk-6.1-rkr5.1, and has PR #487 merged? The second
+    # one is the signal to retire this repository, and nobody would notice it
+    # otherwise.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap and fast: is patches/ still what build-series.py publishes from
+  # upstream/, does it still change nothing those commits did not already change,
+  # and does its provenance still match kernel-pin.env? Runs first so a
+  # hand-edited or swapped series fails in seconds rather than after a BSP fetch.
+  series-integrity:
+    name: series integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: patches/ is generated, not hand-edited
+        run: python3 scripts/build-series.py --check
+
+      - name: patches/ payload and provenance match upstream/ and the pin
+        run: python3 scripts/verify-payload-parity.py
+
+  # Non-blocking on the weekly schedule (drift is information, not a regression);
+  # blocking on push/PR (a change that desyncs the pin from Armbian is a bug).
+  preflight:
+    name: armbian pin preflight
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ github.event_name == 'schedule' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: kernel-pin.env matches the pinned armbian/build revision
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/preflight.sh
+
+      - name: armbian/build HEAD has not moved rk3588 vendor
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/preflight.sh --head
+
+  # The gate. Runs the exact script the README tells a human to run, so a broken
+  # instruction is a red build.
+  apply:
+    name: git am against rk-6.1-rkr5.1
+    needs: series-integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve the pin
+        id: pin
+        run: |
+          source kernel-pin.env
+          {
+            echo "commit=$KERNEL_COMMIT"
+            echo "branch=$KERNEL_BRANCH"
+            echo "mirror=$KERNEL_MIRROR"
+          } >> "$GITHUB_OUTPUT"
+
+      # The BSP fetch dominates the job. Key on the immutable commit, so the
+      # cache is only ever reused for the exact source it was built from.
+      - name: Cache BSP tree
+        id: kernel-cache
+        uses: actions/cache@v6
+        with:
+          path: .work/linux
+          key: linux-rockchip-${{ runner.os }}-${{ steps.pin.outputs.commit }}
+
+      # `git clone --branch` is not usable here: rk-6.1-rkr5.1 carries no tags
+      # and its tip has already moved past the pin. GitHub serves a shallow
+      # fetch of an arbitrary reachable SHA, which is what apply.sh does too.
+      - name: Fetch the BSP at ${{ steps.pin.outputs.commit }}
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          git init .work/linux
+          git -C .work/linux remote add origin "${{ steps.pin.outputs.mirror }}"
+          git -C .work/linux fetch --depth 1 origin "${{ steps.pin.outputs.commit }}"
+          git -C .work/linux checkout FETCH_HEAD
+
+      - name: Reset the cached tree
+        run: |
+          git -C .work/linux am --abort 2>/dev/null || true
+          git -C .work/linux checkout -f "${{ steps.pin.outputs.commit }}"
+          git -C .work/linux clean -fdxq
+
+      - name: Apply the series
+        env:
+          KEEP_TREE: "1"
+        run: scripts/apply.sh .work/linux
+
+      # Save the pristine tree, never a patched one: apply.sh leaves the git am
+      # commits in place, and caching those would poison the next run's reset.
+      - name: Restore the tree to the pinned commit before caching
+        if: always()
+        run: |
+          git -C .work/linux am --abort 2>/dev/null || true
+          git -C .work/linux checkout -f "${{ steps.pin.outputs.commit }}"
+          git -C .work/linux reset --hard "${{ steps.pin.outputs.commit }}"
+          git -C .work/linux clean -fdxq

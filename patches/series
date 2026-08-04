@@ -1,0 +1,7 @@
+# git-am order for the CeraLive RK3588 VENDOR-kernel series.
+# Both files are byte-identical copies of upstream/, which is verbatim
+# `git format-patch` output from armbian/linux-rockchip PR #487 (OPEN, not merged).
+# Target kernel: rk-6.1-rkr5.1 @ 95e85f6cb496c75807c5b16f158853578e7e7d1b
+# Package: linux-image-vendor-rk35xx 6.1.115
+0001-ASoC-hdmi-codec-Allow-playback-and-capture-to-be-dis.patch
+0002-ASoC-hdmi-codec-only-startup-shutdown-on-supported-s.patch

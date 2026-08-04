@@ -1,0 +1,102 @@
+From e61f83c2a1d6e549be8a37ccc4ee3bd7d5957303 Mon Sep 17 00:00:00 2001
+From: Mark Brown <broonie@kernel.org>
+Date: Wed, 30 Nov 2022 18:46:43 +0000
+Subject: [PATCH 1/2] ASoC: hdmi-codec: Allow playback and capture to be
+ disabled
+
+commit f77a066f4ed307db93aafee621e2683c3bda98ce upstream.
+
+Currently the hdmi-codec driver always registers both playback and capture
+capabilities but for most systems there's no actual capture capability,
+usually HDMI is transmit only. Provide platform data which allows the users
+to indicate what is supported so that we don't end up advertising things
+to userspace that we can't actually support.
+
+In order to avoid breaking existing users the flags in platform data are
+a bit awkward and specify what should be disabled rather than doing the
+perhaps more expected thing and defaulting to not supporting capture.
+
+Reviewed-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+Link: https://lore.kernel.org/r/20221130184644.464820-2-broonie@kernel.org
+Signed-off-by: Mark Brown <broonie@kernel.org>
+[smazurov@gmail.com: backported to Armbian linux-rockchip rk-6.1-rkr5.1.
+ This restores upstream behavior that was lost when commit 78c67d98
+ ("ASoC: hdmi-codec: disable capture for HDMI-TX to fix mono audio",
+ PR #430) added an unconditional zeroing of daidrv[].capture.channels_min
+ and channels_max in hdmi_codec_probe(). That zeroing was intended to
+ silence a PulseAudio mono-audio symptom on RK3576 NanoPi HDMI-TX boards,
+ but the same hdmi-audio-codec child device is registered by rk_hdmirx
+ (HDMI-IN) on every RK3588 board with HDMI input, so the unconditional
+ zeroing also killed the HDMI-IN capture PCM (zero-stream registration,
+ card 1 absent from arecord -l, /proc/asound/pcm line ends in a bare
+ colon).
+
+ This patch removes that unconditional zeroing and replaces it with the
+ upstream per-instance no_i2s_playback / no_i2s_capture / no_spdif_*
+ flags. Drivers that need the original PulseAudio workaround (the RK3576
+ HDMI-TX case) can opt back in by setting hdmi_codec_pdata.no_i2s_capture
+ = 1 explicitly. rk_hdmirx leaves the flags unset and capture survives.
+
+ Reported in https://forum.armbian.com/topic/56884-hdmi-input-audio-not-working-with-the-last-bsp-kernel/ .
+ Bisect on Orange Pi 5 Ultra: linux-image-vendor-rk35xx 25.8.2 works,
+ 26.2.1 broken; offending commit is 78c67d98.]
+Tested-by: Stepan Mazurov <smazurov@gmail.com>
+Signed-off-by: Stepan Mazurov <smazurov@gmail.com>
+---
+ include/sound/hdmi-codec.h    |  4 ++++
+ sound/soc/codecs/hdmi-codec.c | 22 ++++++++++++----------
+ 2 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/include/sound/hdmi-codec.h b/include/sound/hdmi-codec.h
+index 48ad33aba..5fa29d108 100644
+--- a/include/sound/hdmi-codec.h
++++ b/include/sound/hdmi-codec.h
+@@ -125,6 +125,10 @@ struct hdmi_codec_pdata {
+ 	const struct hdmi_codec_ops *ops;
+ 	uint i2s:1;
+ 	uint spdif:1;
++	uint no_i2s_playback:1;
++	uint no_i2s_capture:1;
++	uint no_spdif_playback:1;
++	uint no_spdif_capture:1;
+ 	int max_i2s_channels;
+ 	void *data;
+ };
+diff --git a/sound/soc/codecs/hdmi-codec.c b/sound/soc/codecs/hdmi-codec.c
+index f3b9a7de3..e86d12e20 100644
+--- a/sound/soc/codecs/hdmi-codec.c
++++ b/sound/soc/codecs/hdmi-codec.c
+@@ -1110,21 +1110,23 @@ static int hdmi_codec_probe(struct platform_device *pdev)
+ 	if (hcd->i2s) {
+ 		daidrv[i] = hdmi_i2s_dai;
+ 		daidrv[i].playback.channels_max = hcd->max_i2s_channels;
+-		/* Disable capture for HDMI-TX (output only) to prevent
+-		 * PulseAudio from trying to open capture streams which
+-		 * causes "Only one simultaneous stream supported!" errors
+-		 * and results in mono audio output.
+-		 */
+-		daidrv[i].capture.channels_min = 0;
+-		daidrv[i].capture.channels_max = 0;
++		if (hcd->no_i2s_playback)
++			memset(&daidrv[i].playback, 0,
++			       sizeof(daidrv[i].playback));
++		if (hcd->no_i2s_capture)
++			memset(&daidrv[i].capture, 0,
++			       sizeof(daidrv[i].capture));
+ 		i++;
+ 	}
+ 
+ 	if (hcd->spdif) {
+ 		daidrv[i] = hdmi_spdif_dai;
+-		/* Disable capture for HDMI-TX SPDIF (output only) */
+-		daidrv[i].capture.channels_min = 0;
+-		daidrv[i].capture.channels_max = 0;
++		if (hcd->no_spdif_playback)
++			memset(&daidrv[i].playback, 0,
++			       sizeof(daidrv[i].playback));
++		if (hcd->no_spdif_capture)
++			memset(&daidrv[i].capture, 0,
++			       sizeof(daidrv[i].capture));
+ 	}
+ 
+ 	dev_set_drvdata(dev, hcp);

@@ -1,0 +1,203 @@
+# rk3588-vendor-kernel-patches
+
+## ROLE IN THE GROUP
+
+Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backports
+that restore HDMI-RX audio capture on the Armbian vendor BSP kernel
+(`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — the kernel the shipped
+CeraLive image actually runs.
+
+Produces **patch text only** — no `.deb`, no kernel, no image artifact. It is
+therefore **NOT in the device image `REPOS` array** and has **no `versions.yaml`
+pin**, for the same reason `ceralive-infra` has none: there is nothing for the
+image pipeline to fetch.
+
+Relates to:
+- `image-building-pipeline/` — the intended downstream consumer. A future
+  vendor-kernel-build-from-source stage sources `kernel-pin.env`. Nothing is
+  wired up yet; the shipped image is unaffected (see KEY FACTS).
+- `cerastream/` — the consumer of the capability this restores. HDMI-RX embedded
+  audio is unreachable on the shipped kernel without this series.
+- `CERALIVE/rk3588-kernel-patches` — the **sibling, not the parent**. See below.
+
+Patch source: [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487),
+**OPEN, not merged**, pinned by commit SHA.
+
+## THIS REPO vs `rk3588-kernel-patches` — READ THIS FIRST
+
+Two patch packages, two kernels, no overlap. Getting this wrong wastes a day.
+
+| | `rk3588-kernel-patches` | **this repo** |
+|---|---|---|
+| Kernel track | mainline / Armbian `edge` | Armbian `vendor` BSP |
+| Kernel | `v7.1.5` (a tag on `linux-7.1.y`) | `rk-6.1-rkr5.1` @ `95e85f6c` (a commit; branch has no tags) |
+| Package | none shipped | `linux-image-vendor-rk35xx` 6.1.115 — **what the image runs today** |
+| Contents | VEPU580 encoder + 3 HDMI-RX fixes + first-party DT sound card | 2 ASoC hdmi-codec backports |
+| Source shape | raw `diff -ruN`, no mail headers | `git format-patch` mailboxes |
+| Needs a rebase engine? | yes (moving tag, different base kernel) | **no** (fixed commit, applies clean) |
+| Licence shape | `(GPL-2.0+ OR MIT)` disjunction + MIT caveat | plain `GPL-2.0-only`, no caveat |
+
+**Neither one's patches apply to the other's tree**, and neither should grow the
+other's content. The mainline repo's own `AGENTS.md` says of the `78c67d98f221`
+regression: "There is nothing to fix here … Do not add one." This repository is
+where that vendor-side fix lives instead.
+
+## STRUCTURE
+
+```
+rk3588-vendor-kernel-patches/
+├── kernel-pin.env             # SINGLE SOURCE OF TRUTH for every pinned coordinate
+├── upstream/                  # verbatim `git format-patch` output, 2 commits
+├── patches/                   # GENERATED git-am series + series file — NEVER hand-edit
+├── scripts/
+│   ├── preflight.sh           # re-resolve the Armbian vendor mapping; --head for live check
+│   ├── build-series.py        # validates upstream/ then publishes it as patches/; --check
+│   ├── verify-payload-parity.py  # independent: payload + provenance parity
+│   └── apply.sh               # the gate: verify -> fetch pinned commit -> git am -> assert
+├── docs/
+│   ├── PROVENANCE.md          # licence/attribution audit + the unmerged-PR risk + §5 finding
+│   └── PREFLIGHT.md           # how the vendor -> rk-6.1-rkr5.1 mapping was derived
+└── .github/workflows/patch-apply.yml
+```
+
+## WHERE TO LOOK
+
+| Task | Location |
+|------|----------|
+| Change the target kernel commit | [`kernel-pin.env`](kernel-pin.env) — then re-run the gate |
+| Why THIS commit and not the branch tip | [`docs/PREFLIGHT.md`](docs/PREFLIGHT.md) → "Why a COMMIT is pinned" |
+| Whether PR #487 merged yet | `scripts/preflight.sh` (also weekly in CI) |
+| Attribution / licence facts | [`docs/PROVENANCE.md`](docs/PROVENANCE.md) |
+| The partial-backport hazard | [`docs/PROVENANCE.md`](docs/PROVENANCE.md) §5 |
+| Apply the series | `scripts/apply.sh` — see [`README.md`](README.md) |
+| What the bug actually looks like on a board | [`README.md`](README.md) → "The bug" |
+| Why this is simpler than the sibling repo | [`README.md`](README.md) → "Differences from the mainline sibling repo" |
+
+## KEY FACTS
+
+**The bug is board-confirmed, not theoretical.** On the production Rock 5B+
+running `6.1.115-vendor-rk35xx`, with a locked 1920x1080p59.94 input,
+`/proc/asound/pcm` shows `03-00: rockchip,hdmiin i2s-hifi-0 :` — a bare trailing
+colon, zero playback and zero capture substreams. The codec binds, nothing
+errors, and there is simply no device to record from. That silence is why
+`apply.sh` asserts the mechanism rather than trusting a green `git am`.
+
+**`patches/` is generated. Editing it by hand is a bug, and CI catches it.**
+`scripts/build-series.py --check` regenerates from `upstream/` into a temp dir and
+byte-compares. Change `upstream/`, then regenerate — never the other way round.
+
+**`patches/` is a BYTE-IDENTICAL copy of `upstream/`, and that is correct here.**
+Do not "fix" this by adding a conversion step. The sibling repo needs one because
+its sources are raw `diff -ruN` files with no mail headers; ours are
+`git format-patch` output from real commits and `git am` accepts them unchanged.
+`build-series.py` is therefore a **validator plus publisher**, not a converter —
+and it checks *more* than the sibling's converter can, because commit provenance
+is machine-verifiable when the source is a commit: mbox delimiter must be a pinned
+`PATCH_COMMIT_*`, body must declare a pinned `LINUX_COMMIT_*`, author and ordinal
+must match. A swapped or re-authored patch file fails in seconds.
+
+**There is deliberately NO `rebase/` mechanism.** The sibling needs context
+re-anchoring because it pins a moving tag against a kernel its upstream never
+targeted. This repo pins one immutable commit and the series applies with zero
+re-anchoring — proven by the gate. Adding a re-anchor engine with nothing to
+re-anchor would be complexity cosplaying as rigour. If a future pin bump really
+drifts, add it then, with a real conflict to point at.
+
+**This repo pins a COMMIT; Armbian tracks a BRANCH — and the branch has no tags.**
+`rk-6.1-rkr5.1` moves with every BSP push and publishes no tags, so there is no
+tag to pin. `KERNEL_COMMIT=95e85f6cb496c75807c5b16f158853578e7e7d1b` was chosen
+because its commit timestamp (`2026-06-14T17:47:08Z`) matches the running board's
+kernel build stamp (`Sun Jun 14 17:47:08 UTC 2026`) to the second, and its
+`Makefile` reads 6.1.115. **Downstream consumers must pin the same commit.**
+
+**`rk-6.1-rkr5.1` and `rk-6.1-rkr6.1` are DIFFERENT branches, not aliases.**
+`rkr6.1` was introduced later (`armbian/build` PR #8719, 2025-10-05) and produces
+6.1.118, not our 6.1.115. Everything here is `rkr5.1`; `preflight.sh` asserts the
+resolved `KERNELBRANCH` does not contain `rkr6.1`. Note the sibling repo's
+`AGENTS.md` names `rkr6.1` when describing this regression — the regression is
+real on both branches (`78c67d98` merged to `rkr5.1` via PR #430), but `rkr5.1`
+is what CeraLive ships.
+
+**The patch source is an OPEN pull request, and the pin is what contains that
+risk.** PR #487 has not merged. A PR ref (`refs/pull/487/head`) is a moving
+target — a force-push silently changes what it resolves to. This repository pins
+the two **commit SHAs**, which cannot be made to name different content, and
+`verify-payload-parity.py` re-asserts that mapping on every run. What the pin does
+*not* cover is the PR's fate, so `preflight.sh` re-reads its state and fails on
+any change away from `open`.
+
+**If PR #487 merges, RETIRE this repo — do not bump the pin.** A base commit taken
+after the merge already carries the fix; `apply.sh`'s pre-apply check will report
+the regression absent and the series will not apply. That is the intended end
+state, not a malfunction.
+
+**`0001` is a PARTIAL backport, and the gate knows it.** Upstream `f77a066f` also
+rewrote `hdmi_codec_dai_probe()`'s DAPM route registration to skip NULL routes,
+because zeroing a direction NULLs its `stream_name`. PR #487 did not carry that
+hunk. It is currently **unreachable** — `rk_hdmirx` sets no `no_*` flag and a
+tree-wide grep finds no driver that does — but the flags exist so a driver *can*
+opt in, and `0001`'s own commit message invites exactly that for the RK3576
+HDMI-TX case. `apply.sh` fails if the guard is absent **and** any driver opts in.
+Details in [`docs/PROVENANCE.md`](docs/PROVENANCE.md) §5. Do not "fix" this by
+editing patch content; carry the missing hunk as a third patch with its own
+provenance, or push it into PR #487.
+
+**Scope is patch application only.** No kernel is built, nothing is compiled, no
+hardware is touched. Kernel builds belong to `image-building-pipeline`. Hardware
+bench validation — proving HDMI-RX audio capture actually works post-patch — is a
+separate unfinished step. The **symptom** is board-confirmed; the **fix** is not.
+
+**No MIT question arises here.** Both modified files carry plain
+`SPDX-License-Identifier: GPL-2.0-only`, read from the tree at the pinned commit.
+No new file, no SPDX change, no `MODULE_LICENSE` change, nothing under
+`include/uapi/`. The sibling repo's long MIT caveat has no analogue on this path —
+do not copy it over.
+
+## PR TARGETING
+
+This repository is **not a fork**; it was created directly under the CERALIVE
+org, so `gh pr create` has no forked parent to mis-target. Be explicit anyway,
+because the habit is what protects the repos that *are* forks:
+
+```bash
+gh pr create --repo CERALIVE/rk3588-vendor-kernel-patches --base main
+gh pr view <n> --json url -q .url   # MUST be https://github.com/CERALIVE/...
+```
+
+Keep **only** `origin` (CERALIVE) attached at rest. Never add a remote named
+`upstream`.
+
+## CI
+
+One workflow, `patch-apply.yml`, following the root CI/CD canon: `concurrency`
+with `cancel-in-progress: true`; `push` constrained to `branches:` because a
+`pull_request` trigger exists; top-level `permissions: contents: read`; actions
+pinned to latest stable major; the BSP fetch cached. Jobs:
+
+| Job | Asserts |
+|-----|---------|
+| `series-integrity` | `patches/` is generated from `upstream/`, payload-identical, and provenance matches `kernel-pin.env`; stdlib Python only |
+| `preflight` | `kernel-pin.env` still matches `armbian/build`, the pinned commit is still on the branch, and PR #487 is still open — non-blocking on schedule, blocking on PR |
+| `apply` | `scripts/apply.sh` — the real `git am` against the pinned commit |
+
+`apply` is the gate. It runs the same script the README tells humans to run, so a
+broken instruction is a red build.
+
+There is **no build job**, deliberately. Adding one means a cross-compiler, a
+defconfig, and a long job to prove something the image pipeline proves better.
+
+## ANTI-PATTERNS
+
+- Don't hand-edit `patches/` — regenerate from `upstream/`
+- Don't add a conversion step to `build-series.py`; `upstream/` is already `git am`-able
+- Don't add a `rebase/` engine unless a real conflict demands one
+- Don't put first-party content in `upstream/` — there is none, and the credit line depends on that staying true
+- Don't pin `refs/pull/487/head`; pin the commit SHAs
+- Don't claim PR #487 is merged — it is **open**
+- Don't bump the pin when PR #487 merges — retire the repo instead
+- Don't follow the branch tip downstream — pin `KERNEL_COMMIT`
+- Don't confuse `rk-6.1-rkr5.1` with `rk-6.1-rkr6.1`
+- Don't add this repo to `REPOS` or `versions.yaml` — it ships no artifact
+- Don't copy the sibling repo's MIT caveat here; it does not apply
+- Don't add this repo's content to `rk3588-kernel-patches`, or vice versa
+- Don't add a `Co-authored-by:` or any AI/tool attribution to a commit

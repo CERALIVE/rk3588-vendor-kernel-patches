@@ -1,0 +1,71 @@
+Licensing of the material in this repository
+============================================
+
+This file DESCRIBES the licence terms the imported material already carries.
+It GRANTS NOTHING. CeraLive is not a copyright holder of any patch content here
+and is not in a position to license it to anyone.
+
+Read docs/PROVENANCE.md for the full audit, including what we verified, what we
+did not, and the open questions. This file is only a summary.
+
+
+Patch content (upstream/, patches/)
+-----------------------------------
+
+Two backports of two mainline Linux kernel commits, taken verbatim from
+armbian/linux-rockchip pull request #487 (OPEN, not merged) via
+`git format-patch`:
+
+  * 0001  Linux commit f77a066f4ed307db93aafee621e2683c3bda98ce
+          "ASoC: hdmi-codec: Allow playback and capture to be disabled"
+          Copyright (C) Mark Brown <broonie@kernel.org>
+          Reviewed-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+
+  * 0002  Linux commit e041a2a550582106cba6a7c862c90dfc2ad14492
+          "ASoC: hdmi-codec: only startup/shutdown on supported streams"
+          Copyright (C) Emil Abildgaard Svendsen <emas@bang-olufsen.dk>
+          Applied upstream by Mark Brown <broonie@kernel.org>
+
+  Backported to the Armbian rk-6.1-rkr5.1 BSP branch by
+  Stepan Mazurov <smazurov@gmail.com>, who added the bracketed backport
+  annotations, the Tested-by, and the second Signed-off-by on each commit.
+
+Both patches modify only files that already exist in the Linux kernel, and both
+of those files are plain GPL-2.0-only Linux sources:
+
+  * sound/soc/codecs/hdmi-codec.c    // SPDX-License-Identifier: GPL-2.0-only
+                                     Copyright (C) 2015 Texas Instruments
+                                     Incorporated - https://www.ti.com/
+                                     Author: Jyri Sarha <jsarha@ti.com>
+
+  * include/sound/hdmi-codec.h       /* SPDX-License-Identifier: GPL-2.0-only */
+                                     Copyright (C) 2014 Texas Instruments
+                                     Incorporated - https://www.ti.com
+                                     Author: Jyri Sarha <jsarha@ti.com>
+
+The series adds NO new file, alters NO SPDX line, and touches NO MODULE_LICENSE
+value. There is no dual-licence question here and no MIT branch to elect: this
+is GPL-2.0-only Linux kernel code, modified by GPL-2.0-only Linux kernel
+patches, redistributed as GPL-2.0-only kernel patches. See docs/PROVENANCE.md.
+
+Both source repositories carry a collection-level licence of their own, unlike
+the situation documented in the sibling repo CERALIVE/rk3588-kernel-patches:
+
+  * torvalds/linux            GPL-2.0 (COPYING, with the Linux-syscall-note
+                              exception for UAPI headers — not relevant here,
+                              since neither patch touches include/uapi/)
+  * armbian/linux-rockchip    a Linux kernel fork; same COPYING
+
+
+CeraLive-authored material
+--------------------------
+
+Everything under scripts/, docs/, .github/, plus kernel-pin.env, README.md and
+AGENTS.md, is CeraLive packaging, tooling and documentation. It contains no
+patch content. It is offered under GPL-2.0-or-later, matching the material it
+exists to package.
+
+  Copyright (C) 2026 CeraLive
+
+
+No legal review has been performed on any of the above, and none is implied.
