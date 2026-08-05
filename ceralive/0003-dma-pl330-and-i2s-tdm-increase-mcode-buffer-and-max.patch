@@ -1,0 +1,42 @@
+From 2a1ea05d440b0d8ac2993e264628209aee54c4f7 Mon Sep 17 00:00:00 2001
+From: CeraLive kernel patches <ceralive-patches@ceralive.tv>
+Date: Tue, 4 Aug 2026 19:18:43 -0500
+Subject: [PATCH 1/1] Increase PL330 and HDMI-RX I2S DMA budgets
+
+Origin: Armbian linux-rockchip issue #367, reported by YumingChang02 on 2025-06-06.
+
+CeraLive independently validated the PL330 descriptor fix on a Rock 5B+ after the codec patches: the failing ffmpeg capture went from 8/8 mcbufsz/Bad Desc failures to 0/1, with no such errors across six capture runs. The MAXBURST_PER_FIFO half is retained as harmless prior art but was not proven in isolation.
+---
+ drivers/dma/pl330.c                   | 2 +-
+ sound/soc/rockchip/rockchip_i2s_tdm.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/dma/pl330.c b/drivers/dma/pl330.c
+index 31b8ed6c3..009f88b27 100644
+--- a/drivers/dma/pl330.c
++++ b/drivers/dma/pl330.c
+@@ -247,7 +247,7 @@ enum pl330_byteswap {
+  * For typical scenario, at 1word/burst, 10MB and 20MB xfers per req
+  * should be enough for P<->M and M<->M respectively.
+  */
+-#define MCODE_BUFF_PER_REQ	256
++#define MCODE_BUFF_PER_REQ	512
+ 
+ /* Use this _only_ to wait on transient states */
+ #define UNTIL(t, s)	while (!(_state(t) & (s))) cpu_relax();
+diff --git a/sound/soc/rockchip/rockchip_i2s_tdm.c b/sound/soc/rockchip/rockchip_i2s_tdm.c
+index ce832212b..385504c5d 100644
+--- a/sound/soc/rockchip/rockchip_i2s_tdm.c
++++ b/sound/soc/rockchip/rockchip_i2s_tdm.c
+@@ -69,7 +69,7 @@
+ #define CLK_PPM_MAX				(1000)
+ #define CLK_SHIFT_RATE_HZ_MAX			5
+ #define MAXBURST				16
+-#define MAXBURST_PER_FIFO			8
++#define MAXBURST_PER_FIFO			16
+ #define DEPTH_PER_FIFO				32
+ #define WAIT_TIME_MS_MAX			10000
+ 
+-- 
+2.55.0
+
