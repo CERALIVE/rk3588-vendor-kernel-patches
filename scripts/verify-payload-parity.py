@@ -44,6 +44,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PATCHES_DIR = ROOT / "patches"
 UPSTREAM_DIR = ROOT / "upstream"
+CERAlive_DIR = ROOT / "ceralive"
 PIN_FILE = ROOT / "kernel-pin.env"
 
 # File-header lines share the '+'/'-' prefix with real payload but are metadata.
@@ -90,10 +91,9 @@ def check_parity(patch_files: list[Path]) -> int:
     for converted in patch_files:
         original = UPSTREAM_DIR / converted.name
         if not original.is_file():
-            print(
-                f"FAIL {converted.name}: no matching source in upstream/",
-                file=sys.stderr,
-            )
+            original = CERAlive_DIR / converted.name
+        if not original.is_file():
+            print(f"FAIL {converted.name}: no matching source lane", file=sys.stderr)
             failures += 1
             continue
 
@@ -132,6 +132,13 @@ def check_provenance(patch_files: list[Path], pin: dict[str, str]) -> int:
             failures += 1
             continue
         armbian_sha = m.group(1)
+        if (CERAlive_DIR / path.name).is_file() and not (UPSTREAM_DIR / path.name).is_file():
+            if not any(line.startswith("Origin: Armbian linux-rockchip issue #367") for line in lines):
+                print(f"FAIL {path.name}: missing first-party origin", file=sys.stderr)
+                failures += 1
+            else:
+                print(f"OK   {path.name}: first-party CeraLive provenance")
+            continue
         if armbian_sha not in want_armbian:
             print(
                 f"FAIL {path.name}: mbox delimiter {armbian_sha} is not a pinned "

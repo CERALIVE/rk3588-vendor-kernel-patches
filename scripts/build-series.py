@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the imported mailboxes and publish them as the git-am series.
+"""Validate both source lanes and publish them as the git-am series.
 
 Why this is SHORTER than its sibling repo's converter
 -----------------------------------------------------
@@ -7,14 +7,15 @@ Why this is SHORTER than its sibling repo's converter
 headers at all, so its ``build-series.py`` has to synthesise a mailbox around
 each file before ``git am`` will look at it.
 
-This repository has no such problem, and the honest thing to do is say so rather
-than invent one. ``upstream/`` here is ``git format-patch`` output taken from real
-commits in a real clone of ``armbian/linux-rockchip``. Each file already carries
+This repository has no such problem for the imported lane, and the honest thing
+to do is say so rather than invent one. ``upstream/`` here is ``git format-patch``
+output taken from real commits in a real clone of ``armbian/linux-rockchip``. Each file already carries
 its ``From <sha> Mon Sep 17 00:00:00 2001`` delimiter, a real author, a real date,
 a real ``Subject:``, the full backport commit message, and a proper ``diff --git``
 body. ``git am`` accepts them as-is. So ``patches/`` is a **byte-identical copy**
-of ``upstream/`` plus a generated ``series`` file, and this script's real job is
-validation, not conversion.
+of ``upstream/`` and ``ceralive/`` plus a generated ``series`` file. First-party
+mailboxes in ``ceralive/`` are also produced by ``git format-patch``; this script
+validates and publishes them without rewriting either lane.
 
 What it still buys us, and why it is worth keeping
 --------------------------------------------------
@@ -63,10 +64,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UPSTREAM_DIR = ROOT / "upstream"
+CERAlive_DIR = ROOT / "ceralive"
 PATCHES_DIR = ROOT / "patches"
 PIN_FILE = ROOT / "kernel-pin.env"
-
-SERIES_TOTAL = 2
 
 MBOX_FROM_RE = re.compile(r"^From ([0-9a-f]{40}) Mon Sep 17 00:00:00 2001$")
 SUBJECT_RE = re.compile(r"^Subject: \[PATCH (\d+)/(\d+)\] ")
@@ -84,9 +84,12 @@ class Patch:
     filename: str
     ordinal: int
     commit_key: str  # kernel-pin.env key holding the armbian/linux-rockchip SHA
-    linux_commit_key: str  # kernel-pin.env key holding the mainline Linux SHA
     author: str
     summary: str
+    source_dir: Path
+    mailbox_total: int
+    linux_commit_key: str | None = None
+    origin: str | None = None
 
 
 SERIES: tuple[Patch, ...] = (
@@ -94,24 +97,38 @@ SERIES: tuple[Patch, ...] = (
         filename="0001-ASoC-hdmi-codec-Allow-playback-and-capture-to-be-dis.patch",
         ordinal=1,
         commit_key="PATCH_COMMIT_1",
-        linux_commit_key="LINUX_COMMIT_1",
         author="Mark Brown <broonie@kernel.org>",
         summary=(
             "restores the per-instance no_i2s_playback / no_i2s_capture / "
             "no_spdif_playback / no_spdif_capture flags and removes the "
             "unconditional capture zeroing added by the regression commit"
         ),
+        source_dir=UPSTREAM_DIR,
+        mailbox_total=2,
+        linux_commit_key="LINUX_COMMIT_1",
     ),
     Patch(
         filename="0002-ASoC-hdmi-codec-only-startup-shutdown-on-supported-s.patch",
         ordinal=2,
         commit_key="PATCH_COMMIT_2",
-        linux_commit_key="LINUX_COMMIT_2",
         author="Emil Abildgaard Svendsen <EMAS@bang-olufsen.dk>",
         summary=(
             "makes hdmi_codec_startup/shutdown a silent no-op on an unsupported "
             "direction instead of erroring, which multi-codec cards need"
         ),
+        source_dir=UPSTREAM_DIR,
+        mailbox_total=2,
+        linux_commit_key="LINUX_COMMIT_2",
+    ),
+    Patch(
+        filename="0003-dma-pl330-and-i2s-tdm-increase-mcode-buffer-and-max.patch",
+        ordinal=3,
+        commit_key="",
+        author="CeraLive kernel patches <ceralive-patches@ceralive.tv>",
+        summary="raises the PL330 microcode and HDMI-RX I2S FIFO burst budgets",
+        source_dir=CERAlive_DIR,
+        mailbox_total=1,
+        origin="Origin: Armbian linux-rockchip issue #367",
     ),
 )
 
@@ -134,26 +151,25 @@ def read_pin() -> dict[str, str]:
 
 
 def validate(patch: Patch, pin: dict[str, str]) -> None:
-    """Assert an upstream/ file really is the commit kernel-pin.env pins."""
-    src = UPSTREAM_DIR / patch.filename
+    """Assert a source-lane mailbox has the provenance its lane requires."""
+    src = patch.source_dir / patch.filename
     if not src.is_file():
-        raise SeriesError(f"missing upstream mailbox: {src}")
+        raise SeriesError(f"missing source mailbox: {src}")
 
     lines = src.read_text(encoding="utf-8", errors="surrogateescape").splitlines()
     if not lines:
         raise SeriesError(f"{patch.filename}: empty file")
 
-    want_commit = pin[patch.commit_key]
     m = MBOX_FROM_RE.match(lines[0])
     if not m:
         raise SeriesError(
             f"{patch.filename}: first line is not a git mailbox delimiter. "
-            "upstream/ must be verbatim `git format-patch` output."
+            "source lanes must contain verbatim `git format-patch` output."
         )
-    if m.group(1) != want_commit:
+    if patch.commit_key and m.group(1) != pin[patch.commit_key]:
         raise SeriesError(
             f"{patch.filename}: mbox delimiter names {m.group(1)}, but "
-            f"kernel-pin.env {patch.commit_key} pins {want_commit}. "
+            f"kernel-pin.env {patch.commit_key} pins {pin[patch.commit_key]}. "
             "A patch file was swapped or re-exported from a different commit."
         )
 
@@ -166,21 +182,25 @@ def validate(patch: Patch, pin: dict[str, str]) -> None:
     if not subjects:
         raise SeriesError(f"{patch.filename}: no `Subject: [PATCH n/m]` header")
     got_ordinal, got_total = SUBJECT_RE.match(subjects[0]).groups()  # type: ignore[union-attr]
-    if (int(got_ordinal), int(got_total)) != (patch.ordinal, SERIES_TOTAL):
+    expected_ordinal = patch.ordinal if patch.source_dir == UPSTREAM_DIR else 1
+    if (int(got_ordinal), int(got_total)) != (expected_ordinal, patch.mailbox_total):
         raise SeriesError(
             f"{patch.filename}: Subject says [PATCH {got_ordinal}/{got_total}], "
-            f"expected [PATCH {patch.ordinal}/{SERIES_TOTAL}]"
+            f"expected [PATCH {expected_ordinal}/{patch.mailbox_total}]"
         )
 
-    want_linux = pin[patch.linux_commit_key]
-    refs = [
-        m.group(1) for m in (UPSTREAM_REF_RE.match(line) for line in lines) if m
-    ]
-    if want_linux not in refs:
-        raise SeriesError(
-            f"{patch.filename}: does not declare `commit {want_linux} upstream.`. "
-            "Every patch here must be a backport of a named mainline Linux commit."
-        )
+    if patch.linux_commit_key:
+        want_linux = pin[patch.linux_commit_key]
+        refs = [
+            m.group(1) for m in (UPSTREAM_REF_RE.match(line) for line in lines) if m
+        ]
+        if want_linux not in refs:
+            raise SeriesError(
+                f"{patch.filename}: does not declare `commit {want_linux} upstream.`. "
+                "Every upstream patch must be a backport of a named mainline Linux commit."
+            )
+    elif patch.origin and not any(line.startswith(patch.origin) for line in lines):
+        raise SeriesError(f"{patch.filename}: missing first-party origin line {patch.origin!r}")
 
     try:
         sep = lines.index("---")
@@ -202,14 +222,13 @@ def write_series(out_dir: Path, pin: dict[str, str]) -> None:
     for patch in SERIES:
         # Byte-identical copy, on purpose: the source is already a valid mailbox,
         # so there is nothing to convert and nothing to be gained by rewriting it.
-        shutil.copyfile(UPSTREAM_DIR / patch.filename, out_dir / patch.filename)
+        shutil.copyfile(patch.source_dir / patch.filename, out_dir / patch.filename)
 
     series_lines = [
         "# git-am order for the CeraLive RK3588 VENDOR-kernel series.",
-        "# Both files are byte-identical copies of upstream/, which is verbatim",
-        "# `git format-patch` output from armbian/linux-rockchip PR #"
-        + pin["UPSTREAM_PATCHES_PR"]
-        + " (OPEN, not merged).",
+        "# Each file is a byte-identical copy of its source lane (upstream/ or ceralive/).",
+        "# upstream/ is verbatim `git format-patch` output from armbian/linux-rockchip PR #"
+        + pin["UPSTREAM_PATCHES_PR"] + " (OPEN, not merged); ceralive/ is first-party.",
         f"# Target kernel: {pin['KERNEL_BRANCH']} @ {pin['KERNEL_COMMIT']}",
         f"# Package: {pin['KERNEL_DEB_PACKAGE']} {pin['KERNEL_VERSION']}",
         *(p.filename for p in SERIES),
