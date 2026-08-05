@@ -12,8 +12,8 @@ They fix one thing: **HDMI-RX audio capture, which the vendor kernel regressed.*
 | **Which package that is** | `linux-image-vendor-rk35xx` **6.1.115** — what the shipped image installs |
 | **Why that commit** | Its timestamp matches the board's kernel build stamp to the second — derived in [`docs/PREFLIGHT.md`](docs/PREFLIGHT.md) |
 | **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`, both on this kernel) |
-| **Patch source** | [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487) — **OPEN, not merged** |
-| **Status** | Applies cleanly, gate is green. **Not built, not run on hardware.** |
+| **Patch sources** | `upstream/` from [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487), plus the first-party `ceralive/` lane |
+| **Status** | Applies cleanly, gate is green. The complete three-patch series is built and board-tested; end-to-end HDMI audio remains source-dependent. |
 
 > **Not to be confused with [`CERALIVE/rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches).**
 > That repository is scoped exclusively to the **mainline / `edge` 7.1** kernel
@@ -68,9 +68,11 @@ mechanism the vendor tree had diverged from:
 |---|---|---|---|
 | `0001` | `ASoC: hdmi-codec: Allow playback and capture to be disabled` | Linux `f77a066f4ed3` (Mark Brown) | Replaces the unconditional zeroing with per-instance `no_i2s_playback` / `no_i2s_capture` / `no_spdif_playback` / `no_spdif_capture` flags. A driver that wants a direction gone asks for it; `rk_hdmirx` asks for nothing, so its capture survives. |
 | `0002` | `ASoC: hdmi-codec: only startup/shutdown on supported streams` | Linux `e041a2a55058` (Emil Svendsen, applied by Mark Brown) | Makes `hdmi_codec_startup`/`shutdown` a silent no-op on an unsupported direction instead of erroring, which multi-codec cards need. Companion to `0001`; both are required together. |
+| `0003` | `Increase PL330 and HDMI-RX I2S DMA budgets` | CeraLive, from Armbian issue #367 | Raises `MCODE_BUFF_PER_REQ` 256→512 and `MAXBURST_PER_FIFO` 8→16. The issue proposed the exact change; it has no upstream commit counterpart. |
 
-Both were backported onto `rk-6.1-rkr5.1` by Stepan Mazurov (`smazurov`) and
-submitted as PR #487. Full attribution and the licence audit are in
+The first two were backported onto `rk-6.1-rkr5.1` by Stepan Mazurov (`smazurov`)
+and submitted as PR #487. `0003` is independently authored by CeraLive from
+the issue report and board validation. Full attribution and the licence audit are in
 [`docs/PROVENANCE.md`](docs/PROVENANCE.md).
 
 **PR #487 is open, not merged.** This repository exists so CeraLive can carry the
@@ -83,7 +85,8 @@ without pretending the PR landed.
 
 ```
 upstream/          verbatim `git format-patch` output from the two pinned commits
-patches/           the git-am series — GENERATED from upstream/, never hand-edit
+ceralive/          first-party `git format-patch` output with no upstream commit counterpart
+patches/           the git-am series — GENERATED from both lanes, never hand-edit
 scripts/           preflight · build-series · verify-payload-parity · apply
 kernel-pin.env     every pinned coordinate, in one sourceable file
 docs/              provenance audit · preflight derivation
@@ -202,19 +205,16 @@ documented human command and the CI gate.
 Three things are genuinely different, and each simplification is because the
 underlying situation is genuinely simpler — not because rigour was dropped:
 
-**1. `upstream/` is already `git am`-able, so there is nothing to convert.** The
+**1. Both source lanes are already `git am`-able, so there is nothing to convert.** The
 sibling's whole reason for existing is that its upstream ships raw
 `diff -ruN aa/ bb/` output with no mail headers, so `git am` rejects it before
 reading a hunk — its `build-series.py` has to synthesise a mailbox around every
-file. Here `upstream/` is `git format-patch` output from real commits: real
-author, real date, real `Subject:`, full commit message, proper `diff --git`
-body. `git am` takes it as-is. So `patches/` is a **byte-identical copy** of
-`upstream/` plus a generated `series` file, and `build-series.py`'s real job is
-validation, not conversion. It is a shorter script that checks *more*, because
-the sources being commits means their provenance is machine-verifiable —
-`verify-payload-parity.py` asserts each mbox delimiter is a pinned Armbian SHA
-and each body declares a pinned mainline Linux SHA. The sibling cannot make that
-check at all.
+file. Here both lanes are `git format-patch` output with real authors, dates,
+subjects, commit messages, and `diff --git` bodies. `git am` takes them as-is.
+So `patches/` is a **byte-identical copy** of `upstream/` and `ceralive/` plus a
+generated `series` file. `build-series.py` validates rather than converts: the
+imported lane is checked against pinned Armbian and mainline SHAs, while the
+first-party lane is checked against its issue origin.
 
 **2. There is no `rebase/` mechanism, deliberately.** The sibling pins a *tag* on
 a rolling stable branch, targets a kernel its upstream never tested against, and
@@ -245,14 +245,14 @@ It gates **patch application**. It does not:
 
 - build a kernel, or produce any `.deb` or image artifact;
 - verify the patched tree compiles;
-- test anything on RK3588 hardware, or confirm that HDMI-RX audio capture
-  actually works after the patch;
+- repeat the completed board validation; it records the PL330 rejection fix, not
+  end-to-end audio from a source that reports no embedded audio;
 - touch a board, an image, or `image-building-pipeline`'s build stages;
 - claim PR #487 is merged. **It is open.**
 
-Kernel builds are the image pipeline's job. Bench validation on real hardware is
-a separate, still-unfinished step: the symptom is board-confirmed, the fix is
-not yet board-confirmed.
+Kernel builds are the image pipeline's job. The board evidence for `0003` is
+recorded in `vendor-kernel-hdmi-audio-bench-boot-proof-2.md` in the CeraLive
+validation evidence set.
 
 ---
 
@@ -260,7 +260,7 @@ not yet board-confirmed.
 
 Read [`docs/PROVENANCE.md`](docs/PROVENANCE.md) before depending on this.
 
-Short version: both patches modify only `sound/soc/codecs/hdmi-codec.c` and
+Short version: `0001` and `0002` modify only `sound/soc/codecs/hdmi-codec.c` and
 `include/sound/hdmi-codec.h`, both of which carry
 `SPDX-License-Identifier: GPL-2.0-only` (read from the files at the pinned
 commit). No new file is added, no SPDX line is altered, no `MODULE_LICENSE` is
@@ -283,5 +283,5 @@ Both were backported to the Armbian vendor BSP by **Stepan Mazurov**
 (`smazurov`), who also tested them and opened PR #487. The files they modify are
 copyright **Texas Instruments Incorporated**, authored by **Jyri Sarha**.
 
-CeraLive contributes packaging, pinning, auditing and CI — and no patch content
-whatsoever.
+CeraLive contributes packaging, pinning, auditing and CI, and authors `0003` in
+the separate `ceralive/` lane. It is not claimed to be upstream-mergeable.

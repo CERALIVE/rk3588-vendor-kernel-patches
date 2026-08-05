@@ -1,9 +1,10 @@
 # Provenance and licence audit
 
 **Audited:** 2026-08-04
-**Subject:** the two backport commits carried in `upstream/`, taken from
-`armbian/linux-rockchip` pull request
-[#487](https://github.com/armbian/linux-rockchip/pull/487) — **OPEN, not merged**.
+**Subject:** the three-patch series: two backport commits carried in `upstream/`,
+taken from `armbian/linux-rockchip` pull request
+[#487](https://github.com/armbian/linux-rockchip/pull/487) — **OPEN, not merged** —
+and one first-party patch in `ceralive/`.
 
 This is a **factual ledger**, not legal advice and not a clearance. It records
 what was examined, what was found, and which questions remain open. No lawyer has
@@ -20,8 +21,8 @@ in a real clone. Nothing is paraphrased from a summary.
 | Kind | Where | What it is |
 |------|-------|-----------|
 | Git mailbox patches, verbatim | `upstream/*.patch` | `git format-patch` output for two real commits in `armbian/linux-rockchip`, byte-for-byte |
-| Git mailbox patches, published | `patches/*.patch` | **Byte-identical copies** of `upstream/`, plus a generated `series` file |
-| CeraLive-authored | `scripts/`, `docs/`, `kernel-pin.env`, `.github/` | CeraLive packaging, tooling, and documentation |
+| Git mailbox patches, published | `patches/*.patch` | **Byte-identical copies** of `upstream/` and `ceralive/`, plus a generated `series` file |
+| CeraLive-authored | `ceralive/`, `scripts/`, `docs/`, `kernel-pin.env`, `.github/` | CeraLive patch, packaging, tooling, and documentation |
 
 No compiled kernel, `.deb`, or binary blob is redistributed. This repository
 produces patch text only.
@@ -69,7 +70,31 @@ the applying maintainer who signed off `0002`. That is the ordinary shape of a
 real upstream ASoC commit, and it is the strongest single provenance signal here:
 these are not community patches of unknown origin, they are mainline Linux.
 
-### 2.3 Attribution summary
+### 2.3 `0003` — first-party DMA-budget fix
+
+| | |
+|---|---|
+| Source lane | `ceralive/` |
+| Author (git) | **CeraLive kernel patches** `<ceralive-patches@ceralive.tv>` |
+| Origin | Armbian `linux-rockchip` issue [#367](https://github.com/armbian/linux-rockchip/issues/367), reported by **YumingChang02** on 2025-06-06 |
+| Change | Raises `MCODE_BUFF_PER_REQ` in `drivers/dma/pl330.c` from 256 to 512 and `MAXBURST_PER_FIFO` in `sound/soc/rockchip/rockchip_i2s_tdm.c` from 8 to 16 |
+| Upstream status | No mergeable or citable source commit; the origin is the issue comment and proposed diff, not a commit |
+
+`0003` is deliberately not placed in `upstream/`: that lane is reserved for
+verbatim mailboxes whose provenance is a real Armbian commit. The sibling
+mainline repository uses the same `ceralive/` lane for first-party patches with
+no upstream counterpart. This patch was generated from an actual local kernel
+commit after applying `0001` and `0002`, not hand-written.
+
+The board evidence proves the PL330 descriptor rejection is gone: the failing
+ffmpeg request went from 8/8 `mcbufsz (440/256)` / `Bad Desc` failures to 0/1,
+and six capture runs produced no `mcbufsz`, `Bad Desc`, or `FIFO Overrun` lines.
+The `MAXBURST_PER_FIFO` half remains as harmless prior art and was not proven in
+isolation. The evidence file is
+`vendor-kernel-hdmi-audio-bench-boot-proof-2.md`; it also records that the test
+source reported no embedded audio, so this is not an end-to-end audio claim.
+
+### 2.4 Attribution summary
 
 | Person / body | Role |
 |---|---|
@@ -79,7 +104,7 @@ these are not community patches of unknown origin, they are mainline Linux.
 | **Stepan Mazurov** (`smazurov`) `<smazurov@gmail.com>` | Backported both commits onto `rk-6.1-rkr5.1`; author of PR #487; the `Tested-by` on both |
 | **The Armbian project** | Owns `armbian/linux-rockchip`, the fork these commits live in |
 | **Texas Instruments / Jyri Sarha** | Original copyright holder of the two files being modified |
-| CeraLive | Packaging, pinning, auditing, CI. **No patch content.** |
+| CeraLive | First-party author of `0003`; packaging, pinning, auditing, and CI. |
 
 ---
 
@@ -246,17 +271,18 @@ mainline does not.
 ## 6. What this repository does and does not change
 
 - Patch behaviour is **not** modified. `patches/` is a byte-identical copy of
-  `upstream/`, and `scripts/verify-payload-parity.py` proves the added/removed
-  line sets match, independently of the script that produced them.
-- No SPDX identifier, copyright line, trailer, or `Signed-off-by` is added,
-  removed, or altered. In particular **no CeraLive `Signed-off-by` is
-  invented** — a DCO assertion belongs to whoever actually submits a patch, and
-  CeraLive has submitted nothing.
+  the matching `upstream/` or `ceralive/` source lane, and
+  `scripts/verify-payload-parity.py` proves the added/removed line sets match,
+  independently of the script that produced them.
+- No SPDX identifier, copyright line, or existing kernel trailer is added,
+  removed, or altered. `0003` has no invented `Signed-off-by` trailer: it is a
+  first-party packaging patch, not a claim that CeraLive submitted an upstream
+  kernel change.
 - Nothing is relicensed. `LICENSE` describes terms the imported material already
   carries; it grants nothing new.
-- The series is **not** claimed to be upstream-mergeable or upstream-bound. It is
-  already in front of Armbian as PR #487, authored by someone else. CeraLive's
-  contribution is packaging, pinning, auditing and CI.
+- The series is **not** claimed to be upstream-mergeable or upstream-bound. The
+  first two patches are in front of Armbian as PR #487; `0003` originates in an
+  issue comment and has no upstream commit counterpart.
 - No `Co-authored-by:` or AI/tool attribution appears in any commit here, per the
   workspace-wide rule in the root `AGENTS.md`.
 
@@ -277,8 +303,8 @@ mainline does not.
    i2s-hifi-0 :` with zero substreams under a locked 1920x1080p59.94 input — and
    the regression commit `78c67d98f221895336d41d8799b38eff6b6b7b4e` (PR #430,
    merged 2025-11-20) was read directly. The *bisect itself* was not re-run.
-4. **No post-patch hardware validation.** This repository gates patch application
-   only. Whether HDMI-RX audio capture actually works on a board running a kernel
-   built with this series is a separate, unfinished step — see
+4. **End-to-end HDMI audio remains open.** The board evidence for `0003` proves
+   the PL330 descriptor rejection is gone, but the tested HDMI source reported
+   no embedded audio. The MAXBURST half was not proven in isolation; see
    [`README.md`](../README.md) → "Scope".
 5. **No legal review.** None requested, none obtained, none implied.

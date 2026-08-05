@@ -5,7 +5,7 @@
 Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backports
 that restore HDMI-RX audio capture on the Armbian vendor BSP kernel
 (`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — the kernel the shipped
-CeraLive image actually runs.
+CeraLive image actually runs — plus one first-party DMA-budget patch.
 
 Produces **patch text only** — no `.deb`, no kernel, no image artifact. It is
 therefore **NOT in the device image `REPOS` array** and has **no `versions.yaml`
@@ -21,7 +21,8 @@ Relates to:
 - `CERALIVE/rk3588-kernel-patches` — the **sibling, not the parent**. See below.
 
 Patch source: [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487),
-**OPEN, not merged**, pinned by commit SHA.
+**OPEN, not merged**, pinned by commit SHA. `0003` is first-party CeraLive work
+from Armbian issue #367 and therefore belongs in `ceralive/`, not `upstream/`.
 
 ## THIS REPO vs `rk3588-kernel-patches` — READ THIS FIRST
 
@@ -47,7 +48,8 @@ where that vendor-side fix lives instead.
 ```
 rk3588-vendor-kernel-patches/
 ├── kernel-pin.env             # SINGLE SOURCE OF TRUTH for every pinned coordinate
-├── upstream/                  # verbatim `git format-patch` output, 2 commits
+├── upstream/                  # verbatim `git format-patch` output, 2 imported commits
+├── ceralive/                  # first-party `git format-patch` output, no upstream counterpart
 ├── patches/                   # GENERATED git-am series + series file — NEVER hand-edit
 ├── scripts/
 │   ├── preflight.sh           # re-resolve the Armbian vendor mapping; --head for live check
@@ -86,10 +88,10 @@ errors, and there is simply no device to record from. That silence is why
 `scripts/build-series.py --check` regenerates from `upstream/` into a temp dir and
 byte-compares. Change `upstream/`, then regenerate — never the other way round.
 
-**`patches/` is a BYTE-IDENTICAL copy of `upstream/`, and that is correct here.**
+**`patches/` is a BYTE-IDENTICAL copy of each source lane, and that is correct here.**
 Do not "fix" this by adding a conversion step. The sibling repo needs one because
-its sources are raw `diff -ruN` files with no mail headers; ours are
-`git format-patch` output from real commits and `git am` accepts them unchanged.
+its sources are raw `diff -ruN` files with no mail headers; both lanes here are
+`git format-patch` output and `git am` accepts them unchanged.
 `build-series.py` is therefore a **validator plus publisher**, not a converter —
 and it checks *more* than the sibling's converter can, because commit provenance
 is machine-verifiable when the source is a commit: mbox delimiter must be a pinned
@@ -142,10 +144,11 @@ Details in [`docs/PROVENANCE.md`](docs/PROVENANCE.md) §5. Do not "fix" this by
 editing patch content; carry the missing hunk as a third patch with its own
 provenance, or push it into PR #487.
 
-**Scope is patch application only.** No kernel is built, nothing is compiled, no
-hardware is touched. Kernel builds belong to `image-building-pipeline`. Hardware
-bench validation — proving HDMI-RX audio capture actually works post-patch — is a
-separate unfinished step. The **symptom** is board-confirmed; the **fix** is not.
+**Scope is patch application and provenance.** No kernel is built by this repo and
+kernel builds belong to `image-building-pipeline`. `0003` has already been built
+and boot-tested on a Rock 5B+; the evidence proves the PL330 descriptor rejection
+is gone, while end-to-end HDMI audio remains blocked by the tested source reporting
+no embedded audio.
 
 **No MIT question arises here.** Both modified files carry plain
 `SPDX-License-Identifier: GPL-2.0-only`, read from the tree at the pinned commit.
@@ -191,7 +194,7 @@ defconfig, and a long job to prove something the image pipeline proves better.
 - Don't hand-edit `patches/` — regenerate from `upstream/`
 - Don't add a conversion step to `build-series.py`; `upstream/` is already `git am`-able
 - Don't add a `rebase/` engine unless a real conflict demands one
-- Don't put first-party content in `upstream/` — there is none, and the credit line depends on that staying true
+- Don't put first-party content in `upstream/`; first-party patches belong in `ceralive/`
 - Don't pin `refs/pull/487/head`; pin the commit SHAs
 - Don't claim PR #487 is merged — it is **open**
 - Don't bump the pin when PR #487 merges — retire the repo instead
