@@ -1,0 +1,221 @@
+From 013ff08d6c83986a159df540b32a11a21c9e9ee6 Mon Sep 17 00:00:00 2001
+From: CeraLive kernel patches <ceralive-patches@ceralive.tv>
+Date: Thu, 6 Aug 2026 15:35:28 -0500
+Subject: [PATCH 1/1] Start the HDMI-RX audio domain from the capture lifecycle
+
+Origin: CeraLive HDMI-RX audio capture investigation, Rock 5B+, 2026-08-06.
+
+With 0001-0003 applied, /dev/snd/pcmC3D0c registers, opens and negotiates
+hw_params, and then every read() returns EIO. 0004 made that failure printable
+for the first time, and the board output it produced is what this patch is
+built on:
+
+  rockchip-i2s-tdm fddf8000.i2s: hw_params[capture]: dma addr=0x...fddf8028
+      addr_width=4 maxburst=16 ch=2 rate=44100 sample_bits=16
+  rockchip-i2s-tdm fddf8000.i2s: capture dma on: DMACR=0x10f0010 XFER=0x0
+      INTSR=0x0 RXFIFOLR=0x0
+  rk-hdmi-sound hdmiin-sound: capture transfer timed out (DMA or IRQ trouble?):
+      state=3 hw_ptr=0 appl_ptr=0 avail=0 twake=441 period=441 buffer=2205
+  rk-hdmi-sound hdmiin-sound: capture xfer failed: err=-5 state=3 hw_ptr=0
+
+The DMA request line is armed (DMACR RDE set), the descriptor is submitted, and
+hw_ptr never moves. Nothing ever reaches the FIFO.
+
+That is not an I2S-side failure. rockchip_i2s_tdm_trigger() -> _start() calls
+rockchip_i2s_tdm_dma_ctrl() and then rockchip_i2s_tdm_xfer_start(), which for a
+non-TRCM capture stream does write I2S_XFER_RXS_START; clk_trcm is 0 here
+because rk_hdmi_parse_daifmt() makes hdmirx_ctrler the bit-clock and frame
+master and rockchip_i2s_tdm_set_fmt() drops trcm for slave mode. The XFER=0x0
+in the log above is read INSIDE dma_ctrl(), i.e. before that write, and
+I2S_XFER is a non-volatile register absent from reg_defaults under
+REGCACHE_FLAT, so that read returned the regmap cache rather than the register.
+It never said the RX enable bit was unset. The second hunk below fixes that
+measurement so the next board run cannot be misread the same way.
+
+The receiver is enabled. The bus feeding it is idle, and rk_hdmirx.c says why.
+
+The HDMI-RX audio domain is gated by two bits: GLOBAL_SWENABLE.AUDIO_ENABLE and
+AUDIO_PROC_CONFIG0.I2S_EN. hdmirx_audio_setup() explicitly CLEARS AUDIO_ENABLE
+and never touches I2S_EN. Both are only ever set from
+hdmirx_delayed_work_audio() -- AUDIO_ENABLE at its top, I2S_EN via
+hdmirx_enable_audio_output(). Until that work has run, the controller drives no
+BCLK, no LRCK and no SDATA, so i2s7_8ch clocks in nothing regardless of what
+the ALSA side does. Empty FIFO, hw_ptr stuck at 0, EIO out of wait_for_avail().
+
+And nothing in the capture path starts that work. Its only in-kernel trigger is
+avpunit_1_int_handler() on DEFRAMER_VSYNC_THR_REACHED_IRQ, which masks its own
+source off after the first delivery, so it is one-shot and depends on the
+hdmi_irq being delivered at all. Its only other trigger is the vendor
+RK_HDMIRX_CMD_SET_AUDIO_STATE ioctl, which is a rk_hdmirx-specific V4L2
+private command that no ALSA client issues. snd_pcm_open(), hw_params and
+trigger START all leave the audio domain exactly as hdmirx_audio_setup() left
+it: off. The PCM lifecycle and the audio-domain lifecycle were simply never
+connected.
+
+So connect them, in two places:
+
+  * hdmirx_audio_startup() -- the hdmi-codec .audio_startup op, which ASoC
+    calls on every capture open, in process context, long before trigger().
+    If the domain is not up yet it now forces the state machine to run and
+    waits for it, bounded, instead of returning into a stream that is about to
+    time out; the DT wait time for this port is 50 ms, so returning early and
+    hoping is not good enough. The work guards on audio_state.audio_enabled and
+    re-arms itself, so an early forced run advances the state machine rather
+    than duplicating it. A domain that still does not come up is now a warning
+    instead of a silent EIO.
+
+  * hdmirx_plugin() and hdmirx_delayed_work_res_change() -- on the paths that
+    have just confirmed lock and timing, arm the state machine directly rather
+    than relying on the one-shot deframer interrupt. hdmirx_audio_set_state()
+    is the driver's own entry point for this and schedule_delayed_work_on() on
+    an already-queued work is a no-op, so this is additive: if the interrupt
+    does arrive, nothing changes.
+
+hdmirx_plugout() already cancels delayed_work_audio and clears AUDIO_ENABLE, so
+teardown is unchanged.
+
+The i2s-tdm hunk is diagnostic, not behavioural, and is deliberately additive to
+0004 rather than a replacement for it: the pre-start read stays, and a post-start
+read is added next to it. It prints I2S_XFER (cached, therefore the driver's
+intent) beside INTSR and RXFIFOLR (volatile, therefore hardware), which is what
+distinguishes "the receiver was never enabled" from "the receiver is enabled and
+the bus is idle" -- the exact distinction this patch turns on.
+
+0004's instrumentation is retained in full so the fix can be confirmed on
+hardware: a working capture must now show hw_ptr advancing, RXS=1 with a
+non-zero RXFIFOLR, and no "capture xfer failed" line at all.
+---
+ .../platform/rockchip/hdmirx/rk_hdmirx.c      | 57 ++++++++++++++++++-
+ sound/soc/rockchip/rockchip_i2s_tdm.c         | 25 ++++++++
+ 2 files changed, 80 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/rockchip/hdmirx/rk_hdmirx.c b/drivers/media/platform/rockchip/hdmirx/rk_hdmirx.c
+index a2ec7fc6c..832490bc7 100644
+--- a/drivers/media/platform/rockchip/hdmirx/rk_hdmirx.c
++++ b/drivers/media/platform/rockchip/hdmirx/rk_hdmirx.c
+@@ -81,6 +81,8 @@ MODULE_PARM_DESC(low_latency, "low_latency en(0-1)");
+ #define NO_LOCK_CFG_RETRY_TIME		300
+ #define WAIT_LOCK_STABLE_TIME		20
+ #define WAIT_AVI_PKT_TIME		300
++#define HDMIRX_AUDIO_START_TRIES	5
++#define HDMIRX_AUDIO_START_SETTLE_MS	20
+ #define LOGIC_CPU_ID_1			1
+ #define LOGIC_CPU_ID_2			2
+ #define LOGIC_CPU_ID_5			5
+@@ -3376,6 +3378,7 @@ static void hdmirx_plugin(struct rk_hdmirx_dev *hdmirx_dev)
+ 	hdmirx_interrupts_setup(hdmirx_dev, true);
+ 	extcon_set_state_sync(hdmirx_dev->extcon, EXTCON_JACK_VIDEO_IN, true);
+ 	hdmirx_audio_handle_plugged_change(hdmirx_dev, 1);
++	hdmirx_audio_set_state(hdmirx_dev, AUDIO_ON);
+ }
+ 
+ static void hdmirx_plugout(struct rk_hdmirx_dev *hdmirx_dev)
+@@ -3648,10 +3651,59 @@ static int hdmirx_audio_hw_params(struct device *dev, void *data,
+ static int hdmirx_audio_startup(struct device *dev, void *data)
+ {
+ 	struct rk_hdmirx_dev *hdmirx_dev = dev_get_drvdata(dev);
++	int i;
++
++	if (!tx_5v_power_present(hdmirx_dev)) {
++		dev_dbg(dev, "%s: no source connected\n", __func__);
++		return 0;
++	}
+ 
+-	if (tx_5v_power_present(hdmirx_dev) && hdmirx_dev->audio_present)
++	if (hdmirx_dev->audio_present)
+ 		return 0;
+-	dev_dbg(dev, "%s: device is no connected or audio is off\n", __func__);
++
++	/*
++	 * The HDMI-RX audio domain is gated by GLOBAL_SWENABLE.AUDIO_ENABLE and
++	 * AUDIO_PROC_CONFIG0.I2S_EN. hdmirx_audio_setup() explicitly CLEARS
++	 * AUDIO_ENABLE and never sets I2S_EN; both are only ever set by
++	 * hdmirx_delayed_work_audio(). Until that work has run, the controller
++	 * drives no BCLK/LRCK/SDATA at all, so the i2s7 receiver it feeds sees
++	 * an idle bus no matter what the ALSA side does.
++	 *
++	 * Nothing in the capture lifecycle used to start that work: its only
++	 * in-kernel trigger is avpunit_1_int_handler()'s one-shot
++	 * DEFRAMER_VSYNC_THR_REACHED_IRQ, which masks itself off after the
++	 * first delivery, and its only other trigger is the out-of-tree
++	 * RK_HDMIRX_CMD_SET_AUDIO_STATE ioctl that no generic ALSA client
++	 * issues. Open the capture PCM without either and every read() waits on
++	 * a FIFO that can never fill, which surfaces as -EIO from
++	 * wait_for_avail() with hw_ptr still at 0.
++	 *
++	 * So make the capture open itself start the audio domain, and wait for
++	 * it here rather than returning into a stream that is about to time
++	 * out: this callback runs in process context from hdmi_codec_startup(),
++	 * long before trigger(), and the DT wait time for this port is 50 ms.
++	 * The work is idempotent (it guards on audio_state.audio_enabled) and
++	 * re-arms itself, so forcing an early run only advances the state
++	 * machine, it does not duplicate it.
++	 */
++	dev_info(dev, "%s: audio domain idle at capture open, starting it\n",
++		 __func__);
++
++	for (i = 0; i < HDMIRX_AUDIO_START_TRIES; i++) {
++		mod_delayed_work_on(hdmirx_dev->bound_cpu, system_wq,
++				    &hdmirx_dev->delayed_work_audio, 0);
++		flush_delayed_work(&hdmirx_dev->delayed_work_audio);
++		if (hdmirx_dev->audio_present)
++			break;
++		msleep(HDMIRX_AUDIO_START_SETTLE_MS);
++	}
++
++	if (!hdmirx_dev->audio_present)
++		dev_warn(dev,
++			 "%s: audio domain did not come up in %d ms; capture will be silent\n",
++			 __func__,
++			 HDMIRX_AUDIO_START_TRIES * HDMIRX_AUDIO_START_SETTLE_MS);
++
+ 	return 0;
+ }
+ 
+@@ -3880,6 +3932,7 @@ static void hdmirx_delayed_work_res_change(struct work_struct *work)
+ 			hdmirx_dma_config(hdmirx_dev);
+ 			hdmirx_interrupts_setup(hdmirx_dev, true);
+ 			hdmirx_audio_handle_plugged_change(hdmirx_dev, 1);
++			hdmirx_audio_set_state(hdmirx_dev, AUDIO_ON);
+ 		}
+ 	}
+ 	mutex_unlock(&hdmirx_dev->work_lock);
+diff --git a/sound/soc/rockchip/rockchip_i2s_tdm.c b/sound/soc/rockchip/rockchip_i2s_tdm.c
+index 10a7043aa..1d05a8d3d 100644
+--- a/sound/soc/rockchip/rockchip_i2s_tdm.c
++++ b/sound/soc/rockchip/rockchip_i2s_tdm.c
+@@ -1279,6 +1279,31 @@ static void rockchip_i2s_tdm_start(struct rk_i2s_tdm_dev *i2s_tdm, int stream)
+ 		rockchip_i2s_tdm_xfer_trcm_start(i2s_tdm, stream);
+ 	else
+ 		rockchip_i2s_tdm_xfer_start(i2s_tdm, stream);
++
++	if (stream == SNDRV_PCM_STREAM_CAPTURE) {
++		unsigned int xfer, intsr, rxfl;
++
++		/*
++		 * CERALIVE DIAGNOSTIC: 0004 reads these back inside
++		 * rockchip_i2s_tdm_dma_ctrl(), which runs BEFORE xfer_start
++		 * above, so its XFER value is always the pre-start one and can
++		 * never show the RX enable bit. Worse, I2S_XFER is writeable,
++		 * readable, NOT volatile and absent from the reg_defaults
++		 * table, so under REGCACHE_FLAT a regmap_read() of it returns
++		 * the driver's cached intent, not the register. Read it again
++		 * here, after the start, and print the two genuinely volatile
++		 * registers next to it: RXFIFOLR and INTSR do come from
++		 * hardware, so "XFER says RXS started but RXFIFOLR stays 0"
++		 * separates "the receiver was never enabled" from "the receiver
++		 * is enabled and the bus is idle".
++		 */
++		regmap_read(i2s_tdm->regmap, I2S_XFER, &xfer);
++		regmap_read(i2s_tdm->regmap, I2S_INTSR, &intsr);
++		regmap_read(i2s_tdm->regmap, I2S_RXFIFOLR, &rxfl);
++		dev_info(i2s_tdm->dev,
++			 "capture started: XFER=%#x (cached; RXS=%d) INTSR=%#x RXFIFOLR=%#x\n",
++			 xfer, !!(xfer & I2S_XFER_RXS_MASK), intsr, rxfl);
++	}
+ }
+ 
+ static void rockchip_i2s_tdm_stop(struct rk_i2s_tdm_dev *i2s_tdm, int stream)
+-- 
+2.55.0
+

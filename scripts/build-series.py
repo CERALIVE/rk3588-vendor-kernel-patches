@@ -143,6 +143,20 @@ SERIES: tuple[Patch, ...] = (
         mailbox_total=1,
         origin="Origin: CeraLive HDMI-RX audio capture investigation",
     ),
+    Patch(
+        filename="0005-Start-the-HDMI-RX-audio-domain-from-the-capture-life.patch",
+        ordinal=5,
+        commit_key="",
+        author="CeraLive kernel patches <ceralive-patches@ceralive.tv>",
+        summary=(
+            "starts the HDMI-RX audio domain from the ALSA capture lifecycle "
+            "instead of relying on a one-shot deframer interrupt, so the "
+            "controller actually drives the I2S bus that i2s7_8ch receives"
+        ),
+        source_dir=CERAlive_DIR,
+        mailbox_total=1,
+        origin="Origin: CeraLive HDMI-RX audio capture investigation",
+    ),
 )
 
 

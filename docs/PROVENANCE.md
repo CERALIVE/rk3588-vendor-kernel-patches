@@ -1,6 +1,6 @@
 # Provenance and licence audit
 
-**Audited:** 2026-08-04; `0004` added and audited 2026-08-06
+**Audited:** 2026-08-04; `0004` added and audited 2026-08-06; `0005` added and audited 2026-08-06
 **Subject:** the four-patch series: two backport commits carried in `upstream/`,
 taken from `armbian/linux-rockchip` pull request
 [#487](https://github.com/armbian/linux-rockchip/pull/487) — **OPEN, not merged** —
@@ -128,7 +128,7 @@ that it does widen the set of modified files beyond the two §4.2 tabulates; see
 | **Stepan Mazurov** (`smazurov`) `<smazurov@gmail.com>` | Backported both commits onto `rk-6.1-rkr5.1`; author of PR #487; the `Tested-by` on both |
 | **The Armbian project** | Owns `armbian/linux-rockchip`, the fork these commits live in |
 | **Texas Instruments / Jyri Sarha** | Original copyright holder of the two files being modified |
-| CeraLive | First-party author of `0003` and `0004`; packaging, pinning, auditing, and CI. |
+| CeraLive | First-party author of `0003`, `0004` and `0005`; packaging, pinning, auditing, and CI. |
 
 ---
 
@@ -224,6 +224,23 @@ Three are `GPL-2.0-or-later` and one is `GPL-2.0-only`. Distributing the
 collection under GPL-2.0 terms satisfies both: `-or-later` permits GPL-2.0, and
 `-only` requires it. There is still no MIT branch anywhere on this path and
 therefore still no MIT caveat to write.
+
+### 4.2b The file `0005` additionally modifies
+
+`0005` re-touches `sound/soc/rockchip/rockchip_i2s_tdm.c`, already covered above,
+and adds one file:
+
+| File | SPDX (verbatim) |
+|------|-----------------|
+| `drivers/media/platform/rockchip/hdmirx/rk_hdmirx.c` | `// SPDX-License-Identifier: GPL-2.0` |
+
+Bare `GPL-2.0`, read from the first line of the file at the pinned commit. Per
+the kernel's own SPDX documentation that identifier is deprecated in favour of
+`GPL-2.0-only` but carries the same meaning, so it is satisfied by distributing
+this collection under GPL-2.0 terms. No new file, no SPDX change, no
+`MODULE_LICENSE` change, and nothing under `include/uapi/` — `0005` only *reads*
+`enum audio_stat` from `include/uapi/linux/rk_hdmirx_config.h`, which was already
+included by `rk_hdmirx.c` before this series.
 
 ### 4.3 What the series does NOT do
 

@@ -6,7 +6,7 @@ Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backport
 that restore HDMI-RX audio capture on the Armbian vendor BSP kernel
 (`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — the kernel the shipped
 CeraLive image actually runs — plus two first-party patches: a DMA-budget fix
-and a diagnostic instrumentation patch.
+a diagnostic instrumentation patch, and the first-party fix it led to.
 
 Produces **patch text only** — no `.deb`, no kernel, no image artifact. It is
 therefore **NOT in the device image `REPOS` array** and has **no `versions.yaml`
@@ -23,7 +23,8 @@ Relates to:
 
 Patch source: [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487),
 **OPEN, not merged**, pinned by commit SHA. `0003` (DMA budgets, from Armbian
-issue #367) and `0004` (diagnostic instrumentation) are first-party CeraLive work
+issue #367), `0004` (diagnostic instrumentation) and `0005` (the HDMI-RX
+audio-domain fix) are first-party CeraLive work
 and therefore belong in `ceralive/`, not `upstream/`.
 
 ## THIS REPO vs `rk3588-kernel-patches` — READ THIS FIRST
@@ -151,8 +152,9 @@ kernel builds belong to `image-building-pipeline`. `0003` has already been built
 and boot-tested on a Rock 5B+; the evidence proves the PL330 descriptor rejection
 is gone, while end-to-end HDMI audio remains broken.
 
-**`0004` is DIAGNOSTIC ONLY and is expected to be REVERTED.** It changes no
-behaviour. With `0001`-`0003` applied the capture PCM registers, opens and
+**`0004` is DIAGNOSTIC ONLY, and is RETAINED on purpose.** It changes no
+behaviour, and it is no longer "expected to be reverted": it is the only way to
+confirm `0005` on a board, so it stays until that confirmation exists. With `0001`-`0003` applied the capture PCM registers, opens and
 negotiates `hw_params`, but every `read()` returns `EIO` and `dmesg` — cleared
 immediately beforehand — stays empty, including against an EDID-confirmed
 audio-capable source. That silence is structural, not incidental: the only `-EIO`
@@ -161,9 +163,28 @@ level; `snd_dmaengine_pcm_pointer()` discards its `dmaengine_tx_status()` return
 and silently reports position 0; the i2s-tdm interrupt that reports RX overrun is
 `platform_get_irq_optional()` and its absence is unlogged; and a PL330 channel
 fault is reported at `dev_info()` level. `0004` makes each of those printable.
-**Do not treat it as a fix, do not build on it, and do not guess at further burst
-or buffer changes before its output has been read off a board** — that is what
-`0003` already did, and it was not sufficient.
+Do not treat it as a fix.
+
+**`0005` IS the fix, and it is not on the I2S side.** `0004`'s board output showed
+`DMACR` armed and `hw_ptr` stuck at 0, with `XFER=0x0` — but that `XFER` is read
+inside `rockchip_i2s_tdm_dma_ctrl()`, which runs *before*
+`rockchip_i2s_tdm_xfer_start()`, and `I2S_XFER` is non-volatile and absent from
+`reg_defaults` under `REGCACHE_FLAT`, so the read returned the regmap cache and
+not the register. It never proved the RX enable bit was unset, and reading it as
+a smoking gun is a mistake — `0005` adds a post-start read-back next to it so the
+next board run cannot repeat that misreading.
+
+The real gap is that `rk_hdmirx` gates its audio output behind
+`GLOBAL_SWENABLE.AUDIO_ENABLE` and `AUDIO_PROC_CONFIG0.I2S_EN`, both of which are
+set **only** by `hdmirx_delayed_work_audio()`, whose only in-kernel trigger is a
+one-shot `DEFRAMER_VSYNC_THR_REACHED_IRQ` that masks its own source off after the
+first delivery. Nothing in `startup`/`hw_params`/`trigger` ever started it, so the
+controller drove no clocks and the receiver clocked in nothing. `0005` starts it
+from `hdmirx_audio_startup()` and from the plug-in/lock paths.
+
+**`0005` is built but NOT board-confirmed.** Do not mark HDMI-RX audio as working
+until a board shows `hw_ptr` advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no
+`capture xfer failed` line.
 
 **No MIT question arises here.** Both modified files carry plain
 `SPDX-License-Identifier: GPL-2.0-only`, read from the tree at the pinned commit.
