@@ -70,7 +70,7 @@ mechanism the vendor tree had diverged from:
 | `0002` | `ASoC: hdmi-codec: only startup/shutdown on supported streams` | Linux `e041a2a55058` (Emil Svendsen, applied by Mark Brown) | Makes `hdmi_codec_startup`/`shutdown` a silent no-op on an unsupported direction instead of erroring, which multi-codec cards need. Companion to `0001`; both are required together. |
 | `0003` | `Increase PL330 and HDMI-RX I2S DMA budgets` | CeraLive, from Armbian issue #367 | Raises `MCODE_BUFF_PER_REQ` 256→512 and `MAXBURST_PER_FIFO` 8→16. The issue proposed the exact change; it has no upstream commit counterpart. |
 | `0004` | `Instrument the HDMI-RX capture path for the silent EIO` | CeraLive, first-party | **Diagnostic only — changes no behaviour.** Reports the ALSA, dmaengine, i2s-tdm and PL330 conditions that turned into an `EIO` on `read()` with no kernel log at all. Retained on purpose so `0005` can be confirmed on hardware. |
-| `0005` | `Start the HDMI-RX audio domain from the capture lifecycle` | CeraLive, first-party | **The fix.** `rk_hdmirx` gates its audio output behind `GLOBAL_SWENABLE.AUDIO_ENABLE` and `AUDIO_PROC_CONFIG0.I2S_EN`, both of which are only ever set by `hdmirx_delayed_work_audio()` — and nothing in the ALSA capture path started that work. Opening the PCM now starts it. |
+| `0005` | `Start the HDMI-RX audio domain from the capture lifecycle` | CeraLive, first-party | **The fix.** `rk_hdmirx` gates its audio output behind `GLOBAL_SWENABLE.AUDIO_ENABLE` and `AUDIO_PROC_CONFIG0.I2S_EN`, both of which are only ever set by `hdmirx_delayed_work_audio()` — and nothing in the ALSA capture path started that work. Opening the PCM now starts it — waiting on a completion the work signals before it calls back into hdmi-codec, never on the work item itself (see "The bug" for the deadlock the first version of this patch had), and with a gated synchronous cancel on every teardown path. |
 
 The first two were backported onto `rk-6.1-rkr5.1` by Stepan Mazurov (`smazurov`)
 and submitted as PR #487. `0003`, `0004` and `0005` are independently authored by CeraLive
@@ -285,6 +285,18 @@ delivery; its only other trigger is the vendor `RK_HDMIRX_CMD_SET_AUDIO_STATE`
 V4L2 private ioctl, which no ALSA client issues. So opening the capture PCM left
 the HDMI-RX audio domain off, and the controller drove no BCLK, LRCK or SDATA at
 all. `0005` connects the two lifecycles.
+
+**`0005` was corrected on 2026-08-06 after a concurrency review, before any board
+test.** Its first version waited for the audio work with `flush_delayed_work()`
+from inside `hdmirx_audio_startup()` — which `hdmi_codec_startup()` calls with
+`hcp->lock` held, while the work's success path calls `plugged_cb()`, which takes
+that same `hcp->lock`. That is a hard deadlock, and it fires only on the path
+where the fix *works*. The current version waits on a `struct completion` that
+the work signals **before** the lock-taking callback, so the waiter never needs
+the worker to finish; it also replaces the non-synchronous
+`cancel_delayed_work()` on the teardown paths with a gated
+`cancel_delayed_work_sync()`, so a capture open racing an unplug cannot re-arm
+work behind the teardown. See the patch's own commit message for the full trace.
 
 `0005` is built and the series gate is green, but it has **not** been confirmed on
 hardware yet. `0004` is deliberately retained so it can be: a working capture must

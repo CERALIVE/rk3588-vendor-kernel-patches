@@ -182,6 +182,25 @@ first delivery. Nothing in `startup`/`hw_params`/`trigger` ever started it, so t
 controller drove no clocks and the receiver clocked in nothing. `0005` starts it
 from `hdmirx_audio_startup()` and from the plug-in/lock paths.
 
+**`0005` may NOT wait on the audio work item — only on its completion.** This is
+the one thing to get right if you ever touch that patch. `hdmi_codec_startup()`
+calls `.audio_startup` (i.e. `hdmirx_audio_startup()`) with `hcp->lock` HELD, and
+`hdmirx_delayed_work_audio()`'s success path calls `hdmirx_audio_handle_plugged_change()`
+→ `plugged_cb()`, which takes `hcp->lock` **unconditionally**. Any
+`flush_delayed_work()` / `flush_work()` / `cancel_delayed_work_sync()` on
+`delayed_work_audio` from inside `hdmirx_audio_startup()` therefore deadlocks —
+and deadlocks *only when audio is actually present*, because the no-audio path
+never reaches `plugged_cb()`. The first version of `0005` did exactly this and
+was corrected before any board test. The current version waits on
+`hdmirx_dev->audio_ready`, which the work completes **before** that callback; do
+not "simplify" that ordering, and do not reintroduce a flush. Teardown
+(`hdmirx_plugout()`, `hdmirx_remove()`, the probe error path,
+`hdmirx_runtime_suspend()`, `AUDIO_OFF`) goes through `hdmirx_audio_disarm_work()`,
+which clears `audio_arm_allowed` under `audio_arm_lock` and only *then* calls
+`cancel_delayed_work_sync()` — that order is what stops the startup retry loop
+re-arming work behind a teardown. Lock order in this driver is
+`work_lock → hcp->lock`; `hdmirx_audio_startup()` takes neither.
+
 **`0005` is built but NOT board-confirmed.** Do not mark HDMI-RX audio as working
 until a board shows `hw_ptr` advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no
 `capture xfer failed` line.
