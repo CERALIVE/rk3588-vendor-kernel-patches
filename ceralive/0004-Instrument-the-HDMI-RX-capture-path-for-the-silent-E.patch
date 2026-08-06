@@ -1,0 +1,310 @@
+From 4bf775050fadf2288f641b796a4f03e1a9c81064 Mon Sep 17 00:00:00 2001
+From: CeraLive kernel patches <ceralive-patches@ceralive.tv>
+Date: Thu, 6 Aug 2026 13:13:58 -0500
+Subject: [PATCH 1/1] Instrument the HDMI-RX capture path for the silent EIO
+
+Origin: CeraLive HDMI-RX audio capture investigation, Rock 5B+, 2026-08-06.
+
+DIAGNOSTIC ONLY. This patch changes no behaviour and fixes nothing. It exists
+because the failure it targets produces no evidence at all.
+
+With 0001-0003 applied, a Rock 5B+ on 6.1.115 registers the HDMI-RX capture PCM
+correctly: /dev/snd/pcmC3D0c exists, opens, and negotiates hw_params at several
+buffer/period geometries. Every read() then fails with EIO and arecord writes a
+44-byte header-only WAV. It is 100% reproducible, and `dmesg -C` immediately
+before the attempt leaves `dmesg` afterwards completely empty. Patch 0003
+removed the PL330 "Bad Desc"/mcbufsz descriptor-rejection failure class and
+never claimed more than that; this is a different, later failure and no further
+guess at burst or buffer sizes should be made before it is actually observed.
+
+Reading the 6.1 sources at this pin explains the silence, and each hunk below
+targets one of the places the evidence is being dropped:
+
+  * sound/core/pcm_lib.c -- wait_for_avail()'s timeout branch is the ONLY -EIO
+    on the read/write transfer path, and it reports at pcm_dbg() level, so
+    without dynamic_debug a DMA that never delivers a period is a completely
+    silent read() failure. Raised to pcm_err() and extended with the state that
+    separates "hw_ptr never moved" from "hw_ptr moved but avail_min was never
+    reached". A second report at the transfer's error exit names the errno and
+    PCM state for every other origin, so -EBADFD from a DISCONNECTED stream and
+    -EPIPE from an ordinary xrun cannot be confused with the -EIO above.
+
+  * sound/core/pcm_dmaengine.c -- snd_dmaengine_pcm_pointer() discards the
+    dmaengine_tx_status() return value and silently reports position 0 for a
+    residue outside the buffer, so a faulted channel and a stream that has not
+    started yet look identical to the PCM layer, which then just waits until it
+    times out into the -EIO above. A failed cyclic prepare (bare -ENOMEM) and a
+    rejected submit (not checked at all) are reported for the same reason.
+
+  * sound/soc/rockchip/rockchip_i2s_tdm.c -- the capture-direction slave config
+    is logged at hw_params time, since a burst or width the PL330 cannot honour
+    is otherwise invisible; the RX DMA-enable path reads DMACR/XFER/INTSR and
+    RXFIFOLR back, which is the last point at which any RX evidence exists; the
+    overrun handler says whether it propagated an xrun or dropped it for want of
+    a substream, because it disables its own interrupt source either way; and a
+    missing optional interrupt is now reported, because that ISR is the only
+    reporter of RX overrun and its absence is otherwise silent.
+
+  * drivers/dma/pl330.c -- a channel fault kills the audio DMA outright but is
+    reported at dev_info() level, unlike every other real failure in that
+    driver. Raised to dev_err() and extended with CPC/FSM/FSC, which say where
+    the channel stopped and whether the manager faulted with it.
+
+Severity was chosen per file to match how that file already reports failures:
+pcm_err()/dev_err() where the condition is fatal to the transfer, dev_warn() for
+a degraded-but-running condition, and dev_info() for the two configuration
+reports that must be readable on a healthy boot. Nothing uses dev_dbg(), which
+would need dynamic_debug enabled and is exactly why the current failure is
+invisible.
+
+This patch is expected to be reverted once the root cause is known.
+---
+ drivers/dma/pl330.c                   | 17 +++++++--
+ sound/core/pcm_dmaengine.c            | 32 +++++++++++++++-
+ sound/core/pcm_lib.c                  | 39 +++++++++++++++++--
+ sound/soc/rockchip/rockchip_i2s_tdm.c | 55 ++++++++++++++++++++++++++-
+ 4 files changed, 133 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/dma/pl330.c b/drivers/dma/pl330.c
+index 009f88b27..1bccca7b7 100644
+--- a/drivers/dma/pl330.c
++++ b/drivers/dma/pl330.c
+@@ -1863,10 +1863,21 @@ static int pl330_update(struct pl330_dmac *pl330)
+ 		int i = 0;
+ 		while (i < pl330->pcfg.num_chan) {
+ 			if (val & (1 << i)) {
+-				dev_info(pl330->ddma.dev,
+-					"Reset Channel-%d\t CS-%x FTC-%x\n",
++				/*
++				 * CERALIVE DIAGNOSTIC: a channel fault silently
++				 * kills the audio DMA, so report it at error
++				 * level like the rest of this driver's real
++				 * failures, and include CPC/FSM/FSC -- CS+FTC
++				 * alone do not say where the channel stopped
++				 * nor whether the manager faulted too.
++				 */
++				dev_err(pl330->ddma.dev,
++					"Reset Channel-%d\t CS-%x FTC-%x CPC-%x FSM-%x FSC-%x\n",
+ 						i, readl(regs + CS(i)),
+-						readl(regs + FTC(i)));
++						readl(regs + FTC(i)),
++						readl(regs + CPC(i)),
++						readl(regs + FSM),
++						readl(regs + FSC));
+ 				_stop(&pl330->channels[i]);
+ 			}
+ 			i++;
+diff --git a/sound/core/pcm_dmaengine.c b/sound/core/pcm_dmaengine.c
+index 08ec107db..a1156ca56 100644
+--- a/sound/core/pcm_dmaengine.c
++++ b/sound/core/pcm_dmaengine.c
+@@ -174,12 +174,27 @@ static int dmaengine_pcm_prepare_and_submit(struct snd_pcm_substream *substream)
+ 		snd_pcm_lib_buffer_bytes(substream),
+ 		snd_pcm_lib_period_bytes(substream), direction, flags);
+ 
+-	if (!desc)
++	/*
++	 * CERALIVE DIAGNOSTIC: both of these failures are silent upstream --
++	 * the cyclic prepare returns a bare -ENOMEM and a rejected submit is
++	 * not checked at all -- yet either one leaves the capture stream
++	 * running with a DMA that will never deliver a period.
++	 */
++	if (!desc) {
++		pcm_err(substream->pcm,
++			"dmaengine_prep_dma_cyclic failed: dir=%d buf=%zu period=%zu addr=%pad\n",
++			direction, (size_t)snd_pcm_lib_buffer_bytes(substream),
++			(size_t)snd_pcm_lib_period_bytes(substream),
++			&substream->runtime->dma_addr);
+ 		return -ENOMEM;
++	}
+ 
+ 	desc->callback = dmaengine_pcm_dma_complete;
+ 	desc->callback_param = substream;
+ 	prtd->cookie = dmaengine_submit(desc);
++	if (dma_submit_error(prtd->cookie))
++		pcm_err(substream->pcm, "dmaengine_submit rejected: cookie=%d\n",
++			prtd->cookie);
+ 
+ 	return 0;
+ }
+@@ -263,11 +278,24 @@ snd_pcm_uframes_t snd_dmaengine_pcm_pointer(struct snd_pcm_substream *substream)
+ 	struct dma_tx_state state;
+ 	unsigned int buf_size;
+ 	unsigned int pos = 0;
++	enum dma_status status;
+ 
+-	dmaengine_tx_status(prtd->dma_chan, prtd->cookie, &state);
++	status = dmaengine_tx_status(prtd->dma_chan, prtd->cookie, &state);
+ 	buf_size = snd_pcm_lib_buffer_bytes(substream);
+ 	if (state.residue > 0 && state.residue <= buf_size)
+ 		pos = buf_size - state.residue;
++	/*
++	 * CERALIVE DIAGNOSTIC: upstream discards the status and silently
++	 * reports position 0 for an out-of-range residue. A channel that
++	 * faulted (DMA_ERROR) or a residue the engine never populates are
++	 * therefore indistinguishable from "the stream has not advanced yet",
++	 * and the PCM layer just waits until it times out into -EIO.
++	 */
++	if (status == DMA_ERROR || state.residue == 0 || state.residue > buf_size)
++		dev_warn_ratelimited(substream->pcm->card->dev,
++				     "%s: dma status=%d residue=%u in_flight=%u buf=%u -> pos=%u\n",
++				     __func__, status, state.residue,
++				     state.in_flight_bytes, buf_size, pos);
+ 
+ 	runtime->delay = bytes_to_frames(runtime,
+ 					 state.in_flight_bytes);
+diff --git a/sound/core/pcm_lib.c b/sound/core/pcm_lib.c
+index 5c6199a09..140710815 100644
+--- a/sound/core/pcm_lib.c
++++ b/sound/core/pcm_lib.c
+@@ -1934,9 +1934,26 @@ static int wait_for_avail(struct snd_pcm_substream *substream,
+ 			continue;
+ 		}
+ 		if (!tout) {
+-			pcm_dbg(substream->pcm,
+-				"%s write error (DMA or IRQ trouble?)\n",
+-				is_playback ? "playback" : "capture");
++			/*
++			 * CERALIVE DIAGNOSTIC: this is the ONLY -EIO on the
++			 * rw transfer path, and upstream reports it at
++			 * pcm_dbg() level, so without dynamic_debug a stalled
++			 * DMA looks like a completely silent read() failure.
++			 * Report it unconditionally, with the state needed to
++			 * tell "hw_ptr never moved" from "hw_ptr moved but
++			 * avail_min was never reached".
++			 */
++			pcm_err(substream->pcm,
++				"%s transfer timed out (DMA or IRQ trouble?): state=%d hw_ptr=%lu appl_ptr=%lu avail=%lu twake=%lu period=%lu buffer=%lu rate=%u\n",
++				is_playback ? "playback" : "capture",
++				runtime->state,
++				(unsigned long)runtime->status->hw_ptr,
++				(unsigned long)runtime->control->appl_ptr,
++				(unsigned long)avail,
++				(unsigned long)runtime->twake,
++				(unsigned long)runtime->period_size,
++				(unsigned long)runtime->buffer_size,
++				runtime->rate);
+ 			err = -EIO;
+ 			break;
+ 		}
+@@ -2374,6 +2391,22 @@ snd_pcm_sframes_t __snd_pcm_lib_xfer(struct snd_pcm_substream *substream,
+ 		}
+ 	}
+  _end_unlock:
++	/*
++	 * CERALIVE DIAGNOSTIC: a transfer that returns an error without having
++	 * moved a single frame is the shape the HDMI-RX capture failure takes.
++	 * Naming the errno and the state it was reached in distinguishes a
++	 * stalled DMA (-EIO, above) from a torn-down PCM (-EBADFD, i.e. the
++	 * DISCONNECTED state) or an ordinary xrun (-EPIPE). -EAGAIN and
++	 * -ERESTARTSYS are excluded: both are normal caller-driven exits and
++	 * would flood the log from any non-blocking reader.
++	 */
++	if (err < 0 && xfer == 0 && err != -EAGAIN && err != -ERESTARTSYS)
++		pcm_err(substream->pcm,
++			"%s xfer failed: err=%d state=%d hw_ptr=%lu appl_ptr=%lu\n",
++			is_playback ? "playback" : "capture", err,
++			runtime->state,
++			(unsigned long)runtime->status->hw_ptr,
++			(unsigned long)runtime->control->appl_ptr);
+ 	runtime->twake = 0;
+ 	if (xfer > 0 && err >= 0)
+ 		snd_pcm_update_state(substream, runtime);
+diff --git a/sound/soc/rockchip/rockchip_i2s_tdm.c b/sound/soc/rockchip/rockchip_i2s_tdm.c
+index 385504c5d..10a7043aa 100644
+--- a/sound/soc/rockchip/rockchip_i2s_tdm.c
++++ b/sound/soc/rockchip/rockchip_i2s_tdm.c
+@@ -611,9 +611,25 @@ static void rockchip_i2s_tdm_dma_ctrl(struct rk_i2s_tdm_dev *i2s_tdm,
+ 		 */
+ 		udelay(1);
+ 	} else {
++		unsigned int dmacr, xfer, intsr, rxfl;
++
+ 		regmap_update_bits(i2s_tdm->regmap, I2S_DMACR,
+ 				   I2S_DMACR_RDE_MASK,
+ 				   I2S_DMACR_RDE(en));
++
++		/*
++		 * CERALIVE DIAGNOSTIC: RX-side DMA request enable is the exact
++		 * point past which no RX log line exists at all. Reading the
++		 * registers back proves whether the FIFO is being drained or
++		 * whether XFER/DMACR left the receiver idle.
++		 */
++		regmap_read(i2s_tdm->regmap, I2S_DMACR, &dmacr);
++		regmap_read(i2s_tdm->regmap, I2S_XFER, &xfer);
++		regmap_read(i2s_tdm->regmap, I2S_INTSR, &intsr);
++		regmap_read(i2s_tdm->regmap, I2S_RXFIFOLR, &rxfl);
++		dev_info(i2s_tdm->dev,
++			 "capture dma %s: DMACR=%#x XFER=%#x INTSR=%#x RXFIFOLR=%#x\n",
++			 en ? "on" : "off", dmacr, xfer, intsr, rxfl);
+ 	}
+ 
+ 	if (en)
+@@ -2026,6 +2042,20 @@ static int rockchip_i2s_tdm_hw_params(struct snd_pcm_substream *substream,
+ 	dma_data = snd_soc_dai_get_dma_data(dai, substream);
+ 	dma_data->maxburst = MAXBURST_PER_FIFO * params_channels(params) / 2;
+ 
++	/*
++	 * CERALIVE DIAGNOSTIC: the slave-config the dmaengine PCM derives from
++	 * this struct is never reported anywhere, so a capture-direction burst
++	 * or width the PL330 cannot honour is invisible until the transfer
++	 * silently produces nothing.
++	 */
++	dev_info(i2s_tdm->dev,
++		 "hw_params[%s]: dma addr=%pad addr_width=%u maxburst=%u ch=%u rate=%u sample_bits=%d\n",
++		 substream->stream == SNDRV_PCM_STREAM_CAPTURE ? "capture" : "playback",
++		 &dma_data->addr, (unsigned int)dma_data->addr_width,
++		 (unsigned int)dma_data->maxburst,
++		 params_channels(params), params_rate(params),
++		 snd_pcm_format_width(params_format(params)));
++
+ 	if (i2s_tdm->mclk_calibrate)
+ 		rockchip_i2s_tdm_calibrate_mclk(i2s_tdm, substream,
+ 						params_rate(params));
+@@ -3053,13 +3083,23 @@ static irqreturn_t rockchip_i2s_tdm_isr(int irq, void *devid)
+ 	}
+ 
+ 	if (val & I2S_INTSR_RXOI_ACT) {
+-		dev_warn_ratelimited(i2s_tdm->dev, "RX FIFO Overrun\n");
++		substream = i2s_tdm->substreams[SNDRV_PCM_STREAM_CAPTURE];
++		/*
++		 * CERALIVE DIAGNOSTIC: the handler both disables its own
++		 * interrupt source and skips snd_pcm_stop_xrun() when no
++		 * substream is registered, so a single overrun can clear the
++		 * hardware condition and then never be reported again. Say
++		 * which of the two happened.
++		 */
++		dev_warn_ratelimited(i2s_tdm->dev,
++				     "RX FIFO Overrun (INTSR=%#x, %s)\n", val,
++				     substream ? "stopping stream with xrun"
++					       : "NO capture substream, xrun not propagated");
+ 		regmap_update_bits(i2s_tdm->regmap, I2S_INTCR,
+ 				   I2S_INTCR_RXOIC, I2S_INTCR_RXOIC);
+ 		regmap_update_bits(i2s_tdm->regmap, I2S_INTCR,
+ 				   I2S_INTCR_RXOIE_MASK,
+ 				   I2S_INTCR_RXOIE(0));
+-		substream = i2s_tdm->substreams[SNDRV_PCM_STREAM_CAPTURE];
+ 		if (substream)
+ 			snd_pcm_stop_xrun(substream);
+ 	}
+@@ -3399,6 +3439,17 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
+ 			dev_err(&pdev->dev, "failed to request irq %u\n", irq);
+ 			return ret;
+ 		}
++	} else {
++		/*
++		 * CERALIVE DIAGNOSTIC: the interrupt is optional and its
++		 * absence is silent, but rockchip_i2s_tdm_isr() is the ONLY
++		 * reporter of TX underrun and RX overrun. Without it those
++		 * conditions cannot be observed at all, which is exactly the
++		 * "no log line accompanies the failure" symptom.
++		 */
++		dev_warn(&pdev->dev,
++			 "no interrupt (%d): TX underrun / RX overrun detection is unavailable\n",
++			 irq);
+ 	}
+ 
+ 	ret = clk_prepare_enable(i2s_tdm->hclk);
+-- 
+2.55.0
+

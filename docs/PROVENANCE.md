@@ -1,10 +1,10 @@
 # Provenance and licence audit
 
-**Audited:** 2026-08-04
-**Subject:** the three-patch series: two backport commits carried in `upstream/`,
+**Audited:** 2026-08-04; `0004` added and audited 2026-08-06
+**Subject:** the four-patch series: two backport commits carried in `upstream/`,
 taken from `armbian/linux-rockchip` pull request
 [#487](https://github.com/armbian/linux-rockchip/pull/487) — **OPEN, not merged** —
-and one first-party patch in `ceralive/`.
+and two first-party patches in `ceralive/`.
 
 This is a **factual ledger**, not legal advice and not a clearance. It records
 what was examined, what was found, and which questions remain open. No lawyer has
@@ -22,7 +22,7 @@ in a real clone. Nothing is paraphrased from a summary.
 |------|-------|-----------|
 | Git mailbox patches, verbatim | `upstream/*.patch` | `git format-patch` output for two real commits in `armbian/linux-rockchip`, byte-for-byte |
 | Git mailbox patches, published | `patches/*.patch` | **Byte-identical copies** of `upstream/` and `ceralive/`, plus a generated `series` file |
-| CeraLive-authored | `ceralive/`, `scripts/`, `docs/`, `kernel-pin.env`, `.github/` | CeraLive patch, packaging, tooling, and documentation |
+| CeraLive-authored | `ceralive/`, `scripts/`, `docs/`, `kernel-pin.env`, `.github/` | CeraLive patches, packaging, tooling, and documentation |
 
 No compiled kernel, `.deb`, or binary blob is redistributed. This repository
 produces patch text only.
@@ -94,7 +94,31 @@ isolation. The evidence file is
 `vendor-kernel-hdmi-audio-bench-boot-proof-2.md`; it also records that the test
 source reported no embedded audio, so this is not an end-to-end audio claim.
 
-### 2.4 Attribution summary
+### 2.4 `0004` — first-party diagnostic instrumentation
+
+| | |
+|---|---|
+| Source lane | `ceralive/` |
+| Author (git) | **CeraLive kernel patches** `<ceralive-patches@ceralive.tv>` |
+| Origin | First-party CeraLive investigation of the HDMI-RX capture failure on a Rock 5B+, 2026-08-06; no external report, issue or commit |
+| Change | Raises the severity of, and adds state to, existing failure reports in `sound/core/pcm_lib.c`, `sound/core/pcm_dmaengine.c`, `sound/soc/rockchip/rockchip_i2s_tdm.c` and `drivers/dma/pl330.c`, and adds reports for three conditions those files currently drop entirely |
+| Upstream status | None, and none intended. It is instrumentation, not a fix |
+
+**This patch is DIAGNOSTIC ONLY and is expected to be reverted.** It alters no
+control flow and no hardware programming: every hunk either changes a log level,
+extends an existing message, or adds a message on a path that previously produced
+none. It was generated from a real local kernel commit on top of `0001`-`0003`,
+not hand-written, and the tree it produces was compiled as part of an
+`image-building-pipeline` `vendor-patched` build.
+
+It carries no `Signed-off-by` trailer, for the same reason `0003` does not: it is
+first-party out-of-tree work, not a claim that CeraLive submitted an upstream
+kernel change. It adds no file, alters no SPDX line, and touches no
+`MODULE_LICENSE` (§4.3 below therefore still holds unchanged for it) — but note
+that it does widen the set of modified files beyond the two §4.2 tabulates; see
+§4.2a.
+
+### 2.5 Attribution summary
 
 | Person / body | Role |
 |---|---|
@@ -104,7 +128,7 @@ source reported no embedded audio, so this is not an end-to-end audio claim.
 | **Stepan Mazurov** (`smazurov`) `<smazurov@gmail.com>` | Backported both commits onto `rk-6.1-rkr5.1`; author of PR #487; the `Tested-by` on both |
 | **The Armbian project** | Owns `armbian/linux-rockchip`, the fork these commits live in |
 | **Texas Instruments / Jyri Sarha** | Original copyright holder of the two files being modified |
-| CeraLive | First-party author of `0003`; packaging, pinning, auditing, and CI. |
+| CeraLive | First-party author of `0003` and `0004`; packaging, pinning, auditing, and CI. |
 
 ---
 
@@ -182,6 +206,24 @@ both keep their existing licence — read directly from the tree at
 **`GPL-2.0-only`, not `GPL-2.0+`, and not a dual grant.** That was read off the
 actual first line of each file at the pinned commit, not assumed from the
 kernel's general licence policy.
+
+### 4.2a The four files `0004` additionally modifies
+
+`0004` touches four files the table above does not cover. Their licence markers
+were read the same way — directly from the tree at
+`95e85f6cb496c75807c5b16f158853578e7e7d1b`:
+
+| File | SPDX (verbatim) |
+|------|-----------------|
+| `sound/core/pcm_lib.c` | `// SPDX-License-Identifier: GPL-2.0-or-later` |
+| `sound/core/pcm_dmaengine.c` | `// SPDX-License-Identifier: GPL-2.0-or-later` |
+| `sound/soc/rockchip/rockchip_i2s_tdm.c` | `// SPDX-License-Identifier: GPL-2.0-only` |
+| `drivers/dma/pl330.c` | `// SPDX-License-Identifier: GPL-2.0-or-later` |
+
+Three are `GPL-2.0-or-later` and one is `GPL-2.0-only`. Distributing the
+collection under GPL-2.0 terms satisfies both: `-or-later` permits GPL-2.0, and
+`-only` requires it. There is still no MIT branch anywhere on this path and
+therefore still no MIT caveat to write.
 
 ### 4.3 What the series does NOT do
 
@@ -275,14 +317,15 @@ mainline does not.
   `scripts/verify-payload-parity.py` proves the added/removed line sets match,
   independently of the script that produced them.
 - No SPDX identifier, copyright line, or existing kernel trailer is added,
-  removed, or altered. `0003` has no invented `Signed-off-by` trailer: it is a
-  first-party packaging patch, not a claim that CeraLive submitted an upstream
-  kernel change.
+  removed, or altered. Neither `0003` nor `0004` has an invented `Signed-off-by`
+  trailer: both are first-party out-of-tree patches, not claims that CeraLive
+  submitted an upstream kernel change.
 - Nothing is relicensed. `LICENSE` describes terms the imported material already
   carries; it grants nothing new.
 - The series is **not** claimed to be upstream-mergeable or upstream-bound. The
   first two patches are in front of Armbian as PR #487; `0003` originates in an
-  issue comment and has no upstream commit counterpart.
+  issue comment and has no upstream commit counterpart; `0004` is diagnostic
+  instrumentation with no upstream intent at all.
 - No `Co-authored-by:` or AI/tool attribution appears in any commit here, per the
   workspace-wide rule in the root `AGENTS.md`.
 
@@ -303,8 +346,13 @@ mainline does not.
    i2s-hifi-0 :` with zero substreams under a locked 1920x1080p59.94 input — and
    the regression commit `78c67d98f221895336d41d8799b38eff6b6b7b4e` (PR #430,
    merged 2025-11-20) was read directly. The *bisect itself* was not re-run.
-4. **End-to-end HDMI audio remains open.** The board evidence for `0003` proves
-   the PL330 descriptor rejection is gone, but the tested HDMI source reported
-   no embedded audio. The MAXBURST half was not proven in isolation; see
+4. **End-to-end HDMI audio remains open, and the earlier explanation for it was
+   wrong.** The board evidence for `0003` proves the PL330 descriptor rejection is
+   gone. The caveat recorded here previously — that the tested HDMI source
+   reported no embedded audio — no longer holds: a second, EDID-confirmed
+   audio-capable source produces the identical failure, an immediate `EIO` on
+   every `read()` with an empty `dmesg`. The `MAXBURST` half is still unproven in
+   isolation. `0004` was added to make the failure observable rather than to
+   guess again; its output has NOT yet been read off a board. See
    [`README.md`](../README.md) → "Scope".
 5. **No legal review.** None requested, none obtained, none implied.

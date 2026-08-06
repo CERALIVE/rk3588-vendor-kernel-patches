@@ -6,3 +6,4 @@
 0001-ASoC-hdmi-codec-Allow-playback-and-capture-to-be-dis.patch
 0002-ASoC-hdmi-codec-only-startup-shutdown-on-supported-s.patch
 0003-dma-pl330-and-i2s-tdm-increase-mcode-buffer-and-max.patch
+0004-Instrument-the-HDMI-RX-capture-path-for-the-silent-E.patch

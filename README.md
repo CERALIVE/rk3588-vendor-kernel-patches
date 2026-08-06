@@ -13,7 +13,7 @@ They fix one thing: **HDMI-RX audio capture, which the vendor kernel regressed.*
 | **Why that commit** | Its timestamp matches the board's kernel build stamp to the second — derived in [`docs/PREFLIGHT.md`](docs/PREFLIGHT.md) |
 | **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`, both on this kernel) |
 | **Patch sources** | `upstream/` from [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487), plus the first-party `ceralive/` lane |
-| **Status** | Applies cleanly, gate is green. The complete three-patch series is built and board-tested; end-to-end HDMI audio remains source-dependent. |
+| **Status** | Applies cleanly, gate is green. `0001`-`0003` are built and board-tested; end-to-end HDMI audio is still broken and `0004` is the diagnostic patch added to find out why. |
 
 > **Not to be confused with [`CERALIVE/rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches).**
 > That repository is scoped exclusively to the **mainline / `edge` 7.1** kernel
@@ -69,10 +69,12 @@ mechanism the vendor tree had diverged from:
 | `0001` | `ASoC: hdmi-codec: Allow playback and capture to be disabled` | Linux `f77a066f4ed3` (Mark Brown) | Replaces the unconditional zeroing with per-instance `no_i2s_playback` / `no_i2s_capture` / `no_spdif_playback` / `no_spdif_capture` flags. A driver that wants a direction gone asks for it; `rk_hdmirx` asks for nothing, so its capture survives. |
 | `0002` | `ASoC: hdmi-codec: only startup/shutdown on supported streams` | Linux `e041a2a55058` (Emil Svendsen, applied by Mark Brown) | Makes `hdmi_codec_startup`/`shutdown` a silent no-op on an unsupported direction instead of erroring, which multi-codec cards need. Companion to `0001`; both are required together. |
 | `0003` | `Increase PL330 and HDMI-RX I2S DMA budgets` | CeraLive, from Armbian issue #367 | Raises `MCODE_BUFF_PER_REQ` 256→512 and `MAXBURST_PER_FIFO` 8→16. The issue proposed the exact change; it has no upstream commit counterpart. |
+| `0004` | `Instrument the HDMI-RX capture path for the silent EIO` | CeraLive, first-party | **Diagnostic only — changes no behaviour.** Reports the ALSA, dmaengine, i2s-tdm and PL330 conditions that currently turn into an `EIO` on `read()` with no kernel log at all. Expected to be reverted once the root cause is known. |
 
 The first two were backported onto `rk-6.1-rkr5.1` by Stepan Mazurov (`smazurov`)
-and submitted as PR #487. `0003` is independently authored by CeraLive from
-the issue report and board validation. Full attribution and the licence audit are in
+and submitted as PR #487. `0003` and `0004` are independently authored by CeraLive
+from the issue report, board validation, and the sources at the pin. Full
+attribution and the licence audit are in
 [`docs/PROVENANCE.md`](docs/PROVENANCE.md).
 
 **PR #487 is open, not merged.** This repository exists so CeraLive can carry the
@@ -246,13 +248,24 @@ It gates **patch application**. It does not:
 - build a kernel, or produce any `.deb` or image artifact;
 - verify the patched tree compiles;
 - repeat the completed board validation; it records the PL330 rejection fix, not
-  end-to-end audio from a source that reports no embedded audio;
+  end-to-end audio;
 - touch a board, an image, or `image-building-pipeline`'s build stages;
 - claim PR #487 is merged. **It is open.**
 
 Kernel builds are the image pipeline's job. The board evidence for `0003` is
 recorded in `vendor-kernel-hdmi-audio-bench-boot-proof-2.md` in the CeraLive
 validation evidence set.
+
+**Where end-to-end audio actually stands.** `0001`-`0003` restored the capture
+capability and that half is board-confirmed: `/dev/snd/pcmC3D0c` exists, opens,
+and negotiates `hw_params`. With a second, EDID-confirmed audio-capable HDMI
+source attached, every `read()` still fails with `EIO` and produces a 44-byte
+header-only WAV, and `dmesg` — cleared immediately beforehand — stays completely
+empty. The earlier "the test source reported no embedded audio" caveat is
+therefore no longer the explanation; the sample-transfer path is broken for a
+reason nobody has yet seen. `0004` exists solely to make that reason printable.
+It is diagnostic instrumentation, not a fix, and no further guess at burst or
+buffer sizes should be made before its output has been read off a board.
 
 ---
 
@@ -283,5 +296,5 @@ Both were backported to the Armbian vendor BSP by **Stepan Mazurov**
 (`smazurov`), who also tested them and opened PR #487. The files they modify are
 copyright **Texas Instruments Incorporated**, authored by **Jyri Sarha**.
 
-CeraLive contributes packaging, pinning, auditing and CI, and authors `0003` in
-the separate `ceralive/` lane. It is not claimed to be upstream-mergeable.
+CeraLive contributes packaging, pinning, auditing and CI, and authors `0003` and
+`0004` in the separate `ceralive/` lane. It is not claimed to be upstream-mergeable.

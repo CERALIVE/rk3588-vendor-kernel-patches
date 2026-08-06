@@ -5,7 +5,8 @@
 Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backports
 that restore HDMI-RX audio capture on the Armbian vendor BSP kernel
 (`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — the kernel the shipped
-CeraLive image actually runs — plus one first-party DMA-budget patch.
+CeraLive image actually runs — plus two first-party patches: a DMA-budget fix
+and a diagnostic instrumentation patch.
 
 Produces **patch text only** — no `.deb`, no kernel, no image artifact. It is
 therefore **NOT in the device image `REPOS` array** and has **no `versions.yaml`
@@ -21,8 +22,9 @@ Relates to:
 - `CERALIVE/rk3588-kernel-patches` — the **sibling, not the parent**. See below.
 
 Patch source: [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487),
-**OPEN, not merged**, pinned by commit SHA. `0003` is first-party CeraLive work
-from Armbian issue #367 and therefore belongs in `ceralive/`, not `upstream/`.
+**OPEN, not merged**, pinned by commit SHA. `0003` (DMA budgets, from Armbian
+issue #367) and `0004` (diagnostic instrumentation) are first-party CeraLive work
+and therefore belong in `ceralive/`, not `upstream/`.
 
 ## THIS REPO vs `rk3588-kernel-patches` — READ THIS FIRST
 
@@ -33,7 +35,7 @@ Two patch packages, two kernels, no overlap. Getting this wrong wastes a day.
 | Kernel track | mainline / Armbian `edge` | Armbian `vendor` BSP |
 | Kernel | `v7.1.5` (a tag on `linux-7.1.y`) | `rk-6.1-rkr5.1` @ `95e85f6c` (a commit; branch has no tags) |
 | Package | none shipped | `linux-image-vendor-rk35xx` 6.1.115 — **what the image runs today** |
-| Contents | VEPU580 encoder + 3 HDMI-RX fixes + first-party DT sound card | 2 ASoC hdmi-codec backports |
+| Contents | VEPU580 encoder + 3 HDMI-RX fixes + first-party DT sound card | 2 ASoC hdmi-codec backports + 2 first-party patches |
 | Source shape | raw `diff -ruN`, no mail headers | `git format-patch` mailboxes |
 | Needs a rebase engine? | yes (moving tag, different base kernel) | **no** (fixed commit, applies clean) |
 | Licence shape | `(GPL-2.0+ OR MIT)` disjunction + MIT caveat | plain `GPL-2.0-only`, no caveat |
@@ -147,8 +149,21 @@ provenance, or push it into PR #487.
 **Scope is patch application and provenance.** No kernel is built by this repo and
 kernel builds belong to `image-building-pipeline`. `0003` has already been built
 and boot-tested on a Rock 5B+; the evidence proves the PL330 descriptor rejection
-is gone, while end-to-end HDMI audio remains blocked by the tested source reporting
-no embedded audio.
+is gone, while end-to-end HDMI audio remains broken.
+
+**`0004` is DIAGNOSTIC ONLY and is expected to be REVERTED.** It changes no
+behaviour. With `0001`-`0003` applied the capture PCM registers, opens and
+negotiates `hw_params`, but every `read()` returns `EIO` and `dmesg` — cleared
+immediately beforehand — stays empty, including against an EDID-confirmed
+audio-capable source. That silence is structural, not incidental: the only `-EIO`
+on the rw transfer path is `wait_for_avail()`'s timeout, reported at `pcm_dbg()`
+level; `snd_dmaengine_pcm_pointer()` discards its `dmaengine_tx_status()` return
+and silently reports position 0; the i2s-tdm interrupt that reports RX overrun is
+`platform_get_irq_optional()` and its absence is unlogged; and a PL330 channel
+fault is reported at `dev_info()` level. `0004` makes each of those printable.
+**Do not treat it as a fix, do not build on it, and do not guess at further burst
+or buffer changes before its output has been read off a board** — that is what
+`0003` already did, and it was not sufficient.
 
 **No MIT question arises here.** Both modified files carry plain
 `SPDX-License-Identifier: GPL-2.0-only`, read from the tree at the pinned commit.
