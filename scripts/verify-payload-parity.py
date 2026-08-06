@@ -23,8 +23,10 @@ What it checks
 2. **Provenance parity.** The mbox ``From <sha>`` delimiter of each patch must be
    one of the armbian/linux-rockchip commits pinned in ``kernel-pin.env``, and the
    ``commit <sha> upstream.`` line inside the commit message must name one of the
-   pinned mainline Linux commits. Both sets must be fully consumed — two patches,
-   two distinct Armbian SHAs, two distinct Linux SHAs.
+   pinned mainline Linux commits. Both sets must be fully consumed — two
+   ``upstream/`` patches, two distinct Armbian SHAs, two distinct Linux SHAs.
+   A ``ceralive/`` patch has no commit to name, so its provenance claim is its
+   ``Origin:`` line, checked against the enumerated FIRST_PARTY_ORIGINS below.
 
    This is what the sibling repo (CERALIVE/rk3588-kernel-patches) cannot check at
    all: its sources are raw ``diff -ruN`` files with no commit identity. Here the
@@ -52,6 +54,17 @@ FILE_HEADER_RE = re.compile(r"^(\+\+\+|---) ")
 MBOX_FROM_RE = re.compile(r"^From ([0-9a-f]{40}) Mon Sep 17 00:00:00 2001$")
 UPSTREAM_REF_RE = re.compile(r"^commit ([0-9a-f]{40}) upstream\.$")
 PIN_LINE_RE = re.compile(r'^(?P<key>[A-Z0-9_]+)="(?P<value>[^"]*)"\s*(?:#.*)?$')
+
+# A first-party mailbox has no commit to verify against, so its provenance claim
+# IS its Origin line. The accepted set is enumerated rather than matched loosely
+# on "Origin: " so a new first-party patch has to be reviewed into this list, the
+# same way an imported one has to be pinned into kernel-pin.env. Re-derived here
+# on purpose: importing build-series.py's table would make this a second copy of
+# one opinion instead of a second opinion.
+FIRST_PARTY_ORIGINS = (
+    "Origin: Armbian linux-rockchip issue #367",
+    "Origin: CeraLive HDMI-RX audio capture investigation",
+)
 
 
 def read_pin() -> dict[str, str]:
@@ -133,7 +146,11 @@ def check_provenance(patch_files: list[Path], pin: dict[str, str]) -> int:
             continue
         armbian_sha = m.group(1)
         if (CERAlive_DIR / path.name).is_file() and not (UPSTREAM_DIR / path.name).is_file():
-            if not any(line.startswith("Origin: Armbian linux-rockchip issue #367") for line in lines):
+            if not any(
+                line.startswith(origin)
+                for origin in FIRST_PARTY_ORIGINS
+                for line in lines
+            ):
                 print(f"FAIL {path.name}: missing first-party origin", file=sys.stderr)
                 failures += 1
             else:

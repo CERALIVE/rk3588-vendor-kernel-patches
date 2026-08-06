@@ -5,7 +5,8 @@
 Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backports
 that restore HDMI-RX audio capture on the Armbian vendor BSP kernel
 (`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — the kernel the shipped
-CeraLive image actually runs — plus one first-party DMA-budget patch.
+CeraLive image actually runs — plus two first-party patches: a DMA-budget fix
+a diagnostic instrumentation patch, and the first-party fix it led to.
 
 Produces **patch text only** — no `.deb`, no kernel, no image artifact. It is
 therefore **NOT in the device image `REPOS` array** and has **no `versions.yaml`
@@ -21,8 +22,10 @@ Relates to:
 - `CERALIVE/rk3588-kernel-patches` — the **sibling, not the parent**. See below.
 
 Patch source: [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487),
-**OPEN, not merged**, pinned by commit SHA. `0003` is first-party CeraLive work
-from Armbian issue #367 and therefore belongs in `ceralive/`, not `upstream/`.
+**OPEN, not merged**, pinned by commit SHA. `0003` (DMA budgets, from Armbian
+issue #367), `0004` (diagnostic instrumentation) and `0005` (the HDMI-RX
+audio-domain fix) are first-party CeraLive work
+and therefore belong in `ceralive/`, not `upstream/`.
 
 ## THIS REPO vs `rk3588-kernel-patches` — READ THIS FIRST
 
@@ -33,7 +36,7 @@ Two patch packages, two kernels, no overlap. Getting this wrong wastes a day.
 | Kernel track | mainline / Armbian `edge` | Armbian `vendor` BSP |
 | Kernel | `v7.1.5` (a tag on `linux-7.1.y`) | `rk-6.1-rkr5.1` @ `95e85f6c` (a commit; branch has no tags) |
 | Package | none shipped | `linux-image-vendor-rk35xx` 6.1.115 — **what the image runs today** |
-| Contents | VEPU580 encoder + 3 HDMI-RX fixes + first-party DT sound card | 2 ASoC hdmi-codec backports |
+| Contents | VEPU580 encoder + 3 HDMI-RX fixes + first-party DT sound card | 2 ASoC hdmi-codec backports + 2 first-party patches |
 | Source shape | raw `diff -ruN`, no mail headers | `git format-patch` mailboxes |
 | Needs a rebase engine? | yes (moving tag, different base kernel) | **no** (fixed commit, applies clean) |
 | Licence shape | `(GPL-2.0+ OR MIT)` disjunction + MIT caveat | plain `GPL-2.0-only`, no caveat |
@@ -147,8 +150,60 @@ provenance, or push it into PR #487.
 **Scope is patch application and provenance.** No kernel is built by this repo and
 kernel builds belong to `image-building-pipeline`. `0003` has already been built
 and boot-tested on a Rock 5B+; the evidence proves the PL330 descriptor rejection
-is gone, while end-to-end HDMI audio remains blocked by the tested source reporting
-no embedded audio.
+is gone, while end-to-end HDMI audio remains broken.
+
+**`0004` is DIAGNOSTIC ONLY, and is RETAINED on purpose.** It changes no
+behaviour, and it is no longer "expected to be reverted": it is the only way to
+confirm `0005` on a board, so it stays until that confirmation exists. With `0001`-`0003` applied the capture PCM registers, opens and
+negotiates `hw_params`, but every `read()` returns `EIO` and `dmesg` — cleared
+immediately beforehand — stays empty, including against an EDID-confirmed
+audio-capable source. That silence is structural, not incidental: the only `-EIO`
+on the rw transfer path is `wait_for_avail()`'s timeout, reported at `pcm_dbg()`
+level; `snd_dmaengine_pcm_pointer()` discards its `dmaengine_tx_status()` return
+and silently reports position 0; the i2s-tdm interrupt that reports RX overrun is
+`platform_get_irq_optional()` and its absence is unlogged; and a PL330 channel
+fault is reported at `dev_info()` level. `0004` makes each of those printable.
+Do not treat it as a fix.
+
+**`0005` IS the fix, and it is not on the I2S side.** `0004`'s board output showed
+`DMACR` armed and `hw_ptr` stuck at 0, with `XFER=0x0` — but that `XFER` is read
+inside `rockchip_i2s_tdm_dma_ctrl()`, which runs *before*
+`rockchip_i2s_tdm_xfer_start()`, and `I2S_XFER` is non-volatile and absent from
+`reg_defaults` under `REGCACHE_FLAT`, so the read returned the regmap cache and
+not the register. It never proved the RX enable bit was unset, and reading it as
+a smoking gun is a mistake — `0005` adds a post-start read-back next to it so the
+next board run cannot repeat that misreading.
+
+The real gap is that `rk_hdmirx` gates its audio output behind
+`GLOBAL_SWENABLE.AUDIO_ENABLE` and `AUDIO_PROC_CONFIG0.I2S_EN`, both of which are
+set **only** by `hdmirx_delayed_work_audio()`, whose only in-kernel trigger is a
+one-shot `DEFRAMER_VSYNC_THR_REACHED_IRQ` that masks its own source off after the
+first delivery. Nothing in `startup`/`hw_params`/`trigger` ever started it, so the
+controller drove no clocks and the receiver clocked in nothing. `0005` starts it
+from `hdmirx_audio_startup()` and from the plug-in/lock paths.
+
+**`0005` may NOT wait on the audio work item — only on its completion.** This is
+the one thing to get right if you ever touch that patch. `hdmi_codec_startup()`
+calls `.audio_startup` (i.e. `hdmirx_audio_startup()`) with `hcp->lock` HELD, and
+`hdmirx_delayed_work_audio()`'s success path calls `hdmirx_audio_handle_plugged_change()`
+→ `plugged_cb()`, which takes `hcp->lock` **unconditionally**. Any
+`flush_delayed_work()` / `flush_work()` / `cancel_delayed_work_sync()` on
+`delayed_work_audio` from inside `hdmirx_audio_startup()` therefore deadlocks —
+and deadlocks *only when audio is actually present*, because the no-audio path
+never reaches `plugged_cb()`. The first version of `0005` did exactly this and
+was corrected before any board test. The current version waits on
+`hdmirx_dev->audio_ready`, which the work completes **before** that callback; do
+not "simplify" that ordering, and do not reintroduce a flush. Teardown
+(`hdmirx_plugout()`, `hdmirx_remove()`, the probe error path,
+`hdmirx_runtime_suspend()`, `AUDIO_OFF`) goes through `hdmirx_audio_disarm_work()`,
+which clears `audio_arm_allowed` under `audio_arm_lock` and only *then* calls
+`cancel_delayed_work_sync()` — that order is what stops the startup retry loop
+re-arming work behind a teardown. Lock order in this driver is
+`work_lock → hcp->lock`; `hdmirx_audio_startup()` takes neither.
+
+**`0005` is built but NOT board-confirmed.** Do not mark HDMI-RX audio as working
+until a board shows `hw_ptr` advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no
+`capture xfer failed` line.
 
 **No MIT question arises here.** Both modified files carry plain
 `SPDX-License-Identifier: GPL-2.0-only`, read from the tree at the pinned commit.

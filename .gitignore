@@ -1,5 +1,6 @@
 # Scratch BSP kernel tree created by scripts/apply.sh. Multi-GB; never committed.
 .work/
+.work-*/
 
 __pycache__/
 *.pyc

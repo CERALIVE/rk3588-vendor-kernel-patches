@@ -130,6 +130,33 @@ SERIES: tuple[Patch, ...] = (
         mailbox_total=1,
         origin="Origin: Armbian linux-rockchip issue #367",
     ),
+    Patch(
+        filename="0004-Instrument-the-HDMI-RX-capture-path-for-the-silent-E.patch",
+        ordinal=4,
+        commit_key="",
+        author="CeraLive kernel patches <ceralive-patches@ceralive.tv>",
+        summary=(
+            "reports the ALSA, dmaengine, i2s-tdm and PL330 conditions that "
+            "currently turn into a silent EIO on an HDMI-RX capture read"
+        ),
+        source_dir=CERAlive_DIR,
+        mailbox_total=1,
+        origin="Origin: CeraLive HDMI-RX audio capture investigation",
+    ),
+    Patch(
+        filename="0005-Start-the-HDMI-RX-audio-domain-from-the-capture-life.patch",
+        ordinal=5,
+        commit_key="",
+        author="CeraLive kernel patches <ceralive-patches@ceralive.tv>",
+        summary=(
+            "starts the HDMI-RX audio domain from the ALSA capture lifecycle "
+            "instead of relying on a one-shot deframer interrupt, so the "
+            "controller actually drives the I2S bus that i2s7_8ch receives"
+        ),
+        source_dir=CERAlive_DIR,
+        mailbox_total=1,
+        origin="Origin: CeraLive HDMI-RX audio capture investigation",
+    ),
 )
 
 
