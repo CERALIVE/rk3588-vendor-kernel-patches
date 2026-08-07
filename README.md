@@ -13,7 +13,7 @@ They fix one thing: **HDMI-RX audio capture, which the vendor kernel regressed.*
 | **Why that commit** | Its timestamp matches the board's kernel build stamp to the second — derived in [`docs/PREFLIGHT.md`](docs/PREFLIGHT.md) |
 | **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`, both on this kernel) |
 | **Patch sources** | `upstream/` from [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487), plus the first-party `ceralive/` lane |
-| **Status** | Applies cleanly, gate is green. `0001`-`0003` are built and board-tested; `0004` is the diagnostic patch whose board output identified the remaining fault, and `0005` is the fix for it — built, but NOT yet board-confirmed. |
+| **Status** | Applies cleanly, gate is green. `0001`-`0003` are built and board-tested; `0004` is retained as diagnostic instrumentation; and `0005` is board-confirmed on one Radxa ROCK 5B+ test with the evidence recorded below. |
 
 > **Not to be confused with [`CERALIVE/rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches).**
 > That repository is scoped exclusively to the **mainline / `edge` 7.1** kernel
@@ -69,7 +69,7 @@ mechanism the vendor tree had diverged from:
 | `0001` | `ASoC: hdmi-codec: Allow playback and capture to be disabled` | Linux `f77a066f4ed3` (Mark Brown) | Replaces the unconditional zeroing with per-instance `no_i2s_playback` / `no_i2s_capture` / `no_spdif_playback` / `no_spdif_capture` flags. A driver that wants a direction gone asks for it; `rk_hdmirx` asks for nothing, so its capture survives. |
 | `0002` | `ASoC: hdmi-codec: only startup/shutdown on supported streams` | Linux `e041a2a55058` (Emil Svendsen, applied by Mark Brown) | Makes `hdmi_codec_startup`/`shutdown` a silent no-op on an unsupported direction instead of erroring, which multi-codec cards need. Companion to `0001`; both are required together. |
 | `0003` | `Increase PL330 and HDMI-RX I2S DMA budgets` | CeraLive, from Armbian issue #367 | Raises `MCODE_BUFF_PER_REQ` 256→512 and `MAXBURST_PER_FIFO` 8→16. The issue proposed the exact change; it has no upstream commit counterpart. |
-| `0004` | `Instrument the HDMI-RX capture path for the silent EIO` | CeraLive, first-party | **Diagnostic only — changes no behaviour.** Reports the ALSA, dmaengine, i2s-tdm and PL330 conditions that turned into an `EIO` on `read()` with no kernel log at all. Retained on purpose so `0005` can be confirmed on hardware. |
+| `0004` | `Instrument the HDMI-RX capture path for the silent EIO` | CeraLive, first-party | **Diagnostic only — changes no behaviour.** Reports the ALSA, dmaengine, i2s-tdm and PL330 conditions that turned into an `EIO` on `read()` with no kernel log at all. Retained as regression instrumentation for `0005` and future board checks. |
 | `0005` | `Start the HDMI-RX audio domain from the capture lifecycle` | CeraLive, first-party | **The fix.** `rk_hdmirx` gates its audio output behind `GLOBAL_SWENABLE.AUDIO_ENABLE` and `AUDIO_PROC_CONFIG0.I2S_EN`, both of which are only ever set by `hdmirx_delayed_work_audio()` — and nothing in the ALSA capture path started that work. Opening the PCM now starts it — waiting on a completion the work signals before it calls back into hdmi-codec, never on the work item itself (see "The bug" for the deadlock the first version of this patch had), and with a gated synchronous cancel on every teardown path. |
 
 The first two were backported onto `rk-6.1-rkr5.1` by Stepan Mazurov (`smazurov`)
@@ -248,8 +248,8 @@ It gates **patch application**. It does not:
 
 - build a kernel, or produce any `.deb` or image artifact;
 - verify the patched tree compiles;
-- repeat the completed board validation; it records the PL330 rejection fix, not
-  end-to-end audio;
+- independently repeat board validation; it records the completed end-to-end
+  audio validation for `0005`, not a claim of broader hardware coverage;
 - touch a board, an image, or `image-building-pipeline`'s build stages;
 - claim PR #487 is merged. **It is open.**
 
@@ -257,9 +257,9 @@ Kernel builds are the image pipeline's job. The board evidence for `0003` is
 recorded in `vendor-kernel-hdmi-audio-bench-boot-proof-2.md` in the CeraLive
 validation evidence set.
 
-**Where end-to-end audio actually stands.** `0001`-`0003` restored the capture
-capability and that half is board-confirmed: `/dev/snd/pcmC3D0c` exists, opens,
-and negotiates `hw_params`. Every `read()` then failed with `EIO`, silently.
+**Earlier failure before `0005`.** `0001`-`0003` restored the capture capability
+and that half was board-confirmed: `/dev/snd/pcmC3D0c` existed, opened, and
+negotiated `hw_params`. Before `0005`, every `read()` then failed with `EIO`, silently.
 `0004` made that failure printable, and its board output named the fault:
 
 ```
@@ -298,10 +298,25 @@ the worker to finish; it also replaces the non-synchronous
 `cancel_delayed_work_sync()`, so a capture open racing an unplug cannot re-arm
 work behind the teardown. See the patch's own commit message for the full trace.
 
-`0005` is built and the series gate is green, but it has **not** been confirmed on
-hardware yet. `0004` is deliberately retained so it can be: a working capture must
-show `hw_ptr` advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no
-`capture xfer failed` line at all.
+`0005` is board-confirmed on one Radxa ROCK 5B+ test using image
+`20260806T223730Z.raw` after a clean full `dd` reflash. CeraUI's live **Audio
+levels** meters showed real, non-frozen fluctuating values across repeated
+samples: Channel 1 approximately 52–55/100 and Channel 2 approximately
+53–55/100. Kernel dmesg reported `capture started: XFER=0x2 (cached; RXS=1)`
+with non-zero `RXFIFOLR=0xa`, with zero `capture xfer failed` lines. ALSA
+ground truth from `/proc/asound/card3/pcm0c/sub0/status` showed `hw_ptr`
+advancing `15934388 → 16030718` over approximately `2.007s` (approximately
+48000 Hz, matching the driver's reported `restart audio fs(44100 -> 48000)`
+capture rate), while `appl_ptr` tracked closely with bounded delay (`176 → 368`)
+and no runaway drift. The capture owner was cerastream's own idle audio-meter
+sidecar (pid 2907), so this was verified through the real production consumer,
+not a one-off manual `arecord`.
+
+This confirms the gate for that board and source test only; it does not claim
+coverage of other boards, source formats or resolutions, or unplug/replug audio
+recovery. Keep the permanent regression criteria: a board must show `hw_ptr`
+advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no `capture xfer failed` line
+at all.
 
 ---
 

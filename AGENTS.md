@@ -150,11 +150,13 @@ provenance, or push it into PR #487.
 **Scope is patch application and provenance.** No kernel is built by this repo and
 kernel builds belong to `image-building-pipeline`. `0003` has already been built
 and boot-tested on a Rock 5B+; the evidence proves the PL330 descriptor rejection
-is gone, while end-to-end HDMI audio remains broken.
+is gone. Before `0005`, end-to-end HDMI audio remained broken; the board evidence
+below confirms the `0005` fix for the tested source.
 
 **`0004` is DIAGNOSTIC ONLY, and is RETAINED on purpose.** It changes no
-behaviour, and it is no longer "expected to be reverted": it is the only way to
-confirm `0005` on a board, so it stays until that confirmation exists. With `0001`-`0003` applied the capture PCM registers, opens and
+behaviour, and it is no longer "expected to be reverted": it is the regression
+instrumentation used to verify `0005` on a board and remains available for future
+regressions. With `0001`-`0003` applied the capture PCM registers, opens and
 negotiates `hw_params`, but every `read()` returns `EIO` and `dmesg` — cleared
 immediately beforehand — stays empty, including against an EDID-confirmed
 audio-capable source. That silence is structural, not incidental: the only `-EIO`
@@ -201,9 +203,24 @@ which clears `audio_arm_allowed` under `audio_arm_lock` and only *then* calls
 re-arming work behind a teardown. Lock order in this driver is
 `work_lock → hcp->lock`; `hdmirx_audio_startup()` takes neither.
 
-**`0005` is built but NOT board-confirmed.** Do not mark HDMI-RX audio as working
-until a board shows `hw_ptr` advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no
-`capture xfer failed` line.
+**`0005` is board-confirmed on one Radxa ROCK 5B+ test.** The standing gate is
+now **PASSED**, not an open prerequisite: after a clean full `dd` reflash of
+image `20260806T223730Z.raw`, CeraUI's live **Audio levels** meters showed real,
+non-frozen fluctuating values across repeated samples (Channel 1 approximately
+52–55/100; Channel 2 approximately 53–55/100). Kernel dmesg reported
+`capture started: XFER=0x2 (cached; RXS=1)` with non-zero `RXFIFOLR=0xa`, and
+there were zero `capture xfer failed` lines. ALSA ground truth from
+`/proc/asound/card3/pcm0c/sub0/status` showed `hw_ptr` advancing
+`15934388 → 16030718` over approximately `2.007s` (approximately 48000 Hz,
+matching the driver's reported `restart audio fs(44100 -> 48000)` capture rate),
+while `appl_ptr` tracked closely with bounded delay (`176 → 368`) and no
+runaway drift. The capture owner was cerastream's own idle audio-meter sidecar
+(pid 2907), proving the result through the production consumer rather than a
+one-off manual `arecord`.
+
+Keep these criteria as the permanent regression gate: a board must show
+`hw_ptr` advancing, `RXS=1` with a non-zero `RXFIFOLR`, and no `capture xfer
+failed` line.
 
 **No MIT question arises here.** Both modified files carry plain
 `SPDX-License-Identifier: GPL-2.0-only`, read from the tree at the pinned commit.
