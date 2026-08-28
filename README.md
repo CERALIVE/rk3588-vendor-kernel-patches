@@ -1,5 +1,11 @@
 # rk3588-vendor-kernel-patches
 
+> **RETIRED 2026-08-28** — The fleet moved to the mainline kernel
+> ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
+> `edge` v7.2 track). This vendor 6.1 BSP patch series is preserved at tag
+> `final`. See the CeraLive workspace plan
+> `cerastream-glibc-pipewire-network-ui`.
+
 Out-of-tree patches for the **Armbian vendor BSP kernel** the shipped CeraLive
 image actually runs, packaged as a `git am`-able mailbox series pinned to an
 exact commit.

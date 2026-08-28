@@ -1,5 +1,11 @@
 # rk3588-vendor-kernel-patches
 
+> **RETIRED 2026-08-28** — The fleet moved to the mainline kernel
+> ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
+> `edge` v7.2 track). This vendor 6.1 BSP patch series is preserved at tag
+> `final`. See the CeraLive workspace plan
+> `cerastream-glibc-pipewire-network-ui`.
+
 ## ROLE IN THE GROUP
 
 Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backports
