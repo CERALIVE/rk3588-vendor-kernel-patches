@@ -1,10 +1,12 @@
 # rk3588-vendor-kernel-patches
 
-> **RETIRED 2026-08-28 — FINAL** — The project owner has confirmed the mainline
+> **NOT CURRENTLY IN PRODUCTION USE (2026-08-29)** — The project owner has confirmed
 > ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
-> `edge` v7.2 track) as the permanent production kernel after hands-on testing
-> on the bench devices. The vendor 6.1 BSP patch series is permanently retired
-> and preserved at tag `final`. See the CeraLive workspace plan
+> `edge` v7.2 track) as the permanent production kernel after hands-on testing on
+> the bench devices. This repository's vendor 6.1 BSP patch series is therefore
+> not used by the shipped image today, but it remains active and unarchived because
+> the patches are useful reference material for the vendor 6.1 BSP track and a
+> documented real fix for a real upstream regression. See the CeraLive workspace plan
 > `cerastream-glibc-pipewire-network-ui`.
 
 Out-of-tree patches for the **Armbian vendor BSP kernel** the shipped CeraLive
@@ -192,10 +194,11 @@ scripts/preflight.sh --head     # has Armbian moved the vendor branch? did PR #4
 scripts/apply.sh                # the gate must stay green
 ```
 
-**If PR #487 merges, do not bump — retire.** A pin taken after the merge already
-carries the fix, `apply.sh`'s pre-apply check will report the regression absent,
-and applying on top would fail. That is the intended end state of this
-repository, not a malfunction. `preflight.sh` watches for it.
+**If PR #487 merges, do not bump — the patches become superseded.** A pin taken
+after the merge already carries the fix, `apply.sh`'s pre-apply check will report
+the regression absent, and applying on top would fail. Stop tracking new commits,
+but keep this repository and its content available as useful historical reference.
+`preflight.sh` watches for it.
 
 **If the series ever stops applying**, do not hand-edit `patches/` and do not
 invent a resolution. Either re-export from `armbian/linux-rockchip` at the pinned

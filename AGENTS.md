@@ -1,10 +1,12 @@
 # rk3588-vendor-kernel-patches
 
-> **RETIRED 2026-08-28 — FINAL** — The project owner has confirmed the mainline
+> **NOT CURRENTLY IN PRODUCTION USE (2026-08-29)** — The project owner has confirmed
 > ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
-> `edge` v7.2 track) as the permanent production kernel after hands-on testing
-> on the bench devices. The vendor 6.1 BSP patch series is permanently retired
-> and preserved at tag `final`. See the CeraLive workspace plan
+> `edge` v7.2 track) as the permanent production kernel after hands-on testing on
+> the bench devices. This repository's vendor 6.1 BSP patch series is therefore
+> not used by the shipped image today, but it remains active and unarchived because
+> the patches are useful reference material for the vendor 6.1 BSP track and a
+> documented real fix for a real upstream regression. See the CeraLive workspace plan
 > `cerastream-glibc-pipewire-network-ui`.
 
 ## ROLE IN THE GROUP
@@ -276,7 +278,7 @@ defconfig, and a long job to prove something the image pipeline proves better.
 - Don't put first-party content in `upstream/`; first-party patches belong in `ceralive/`
 - Don't pin `refs/pull/487/head`; pin the commit SHAs
 - Don't claim PR #487 is merged — it is **open**
-- Don't bump the pin when PR #487 merges — retire the repo instead
+- Don't bump the pin when PR #487 merges — the patches become superseded; stop tracking new commits, but keep the repo and its content as useful historical reference
 - Don't follow the branch tip downstream — pin `KERNEL_COMMIT`
 - Don't confuse `rk-6.1-rkr5.1` with `rk-6.1-rkr6.1`
 - Don't add this repo to `REPOS` or `versions.yaml` — it ships no artifact
