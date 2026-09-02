@@ -1,13 +1,25 @@
 # rk3588-vendor-kernel-patches
 
-> **NOT CURRENTLY IN PRODUCTION USE (2026-08-29)** — The project owner has confirmed
-> ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
-> `edge` v7.2 track) as the permanent production kernel after hands-on testing on
-> the bench devices. This repository's vendor 6.1 BSP patch series is therefore
-> not used by the shipped image today, but it remains active and unarchived because
-> the patches are useful reference material for the vendor 6.1 BSP track and a
-> documented real fix for a real upstream regression. See the CeraLive workspace plan
-> `cerastream-glibc-pipewire-network-ui`.
+> ## Preserved, not retired — and open for contributions
+>
+> **This patch series is no longer consumed by CeraLive's image-building pipeline.**
+> The shipped CeraLive image runs the mainline / Armbian `edge` 7.2 kernel, whose patch
+> series lives in the sibling repository
+> [`CERALIVE/rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches).
+> The project owner confirmed that track as the permanent production kernel after
+> hands-on testing on the bench devices.
+>
+> **This repository is deliberately preserved, and it stays fully active.** It is not
+> archived, not frozen, and not read-only. What it carries is a documented,
+> board-confirmed repair for a real upstream regression on the Armbian vendor 6.1 BSP
+> kernel — and those fixes remain valuable to anyone building their own custom
+> vendor-kernel images. CeraLive moving its own production images to the mainline track
+> does not make the vendor track any less broken for the people still building on it.
+>
+> **Contributions and pull requests remain welcome here.** Issues, patch improvements,
+> pin bumps, and board reports are all still accepted.
+>
+> Background: the CeraLive workspace plan `cerastream-glibc-pipewire-network-ui`.
 
 ## ROLE IN THE GROUP
 
