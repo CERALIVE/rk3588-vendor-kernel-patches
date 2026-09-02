@@ -1,26 +1,38 @@
 # rk3588-vendor-kernel-patches
 
-> **NOT CURRENTLY IN PRODUCTION USE (2026-08-29)** — The project owner has confirmed
-> ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
-> `edge` v7.2 track) as the permanent production kernel after hands-on testing on
-> the bench devices. This repository's vendor 6.1 BSP patch series is therefore
-> not used by the shipped image today, but it remains active and unarchived because
-> the patches are useful reference material for the vendor 6.1 BSP track and a
-> documented real fix for a real upstream regression. See the CeraLive workspace plan
-> `cerastream-glibc-pipewire-network-ui`.
+> ## Preserved, not retired — and open for contributions
+>
+> **This patch series is no longer consumed by CeraLive's image-building pipeline.**
+> The shipped CeraLive image runs the mainline / Armbian `edge` 7.2 kernel, whose patch
+> series lives in the sibling repository
+> [`CERALIVE/rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches).
+> The project owner confirmed that track as the permanent production kernel after
+> hands-on testing on the bench devices.
+>
+> **This repository is deliberately preserved, and it stays fully active.** It is not
+> archived, not frozen, and not read-only. What it carries is a documented,
+> board-confirmed repair for a real upstream regression on the Armbian vendor 6.1 BSP
+> kernel — and those fixes remain valuable to anyone building their own custom
+> vendor-kernel images. CeraLive moving its own production images to the mainline track
+> does not make the vendor track any less broken for the people still building on it.
+>
+> **Contributions and pull requests remain welcome here.** Issues, patch improvements,
+> pin bumps, and board reports are all still accepted.
+>
+> Background: the CeraLive workspace plan `cerastream-glibc-pipewire-network-ui`.
 
-Out-of-tree patches for the **Armbian vendor BSP kernel** the shipped CeraLive
-image actually runs, packaged as a `git am`-able mailbox series pinned to an
-exact commit.
+Out-of-tree patches for the **Armbian vendor BSP kernel**
+(`linux-image-vendor-rk35xx` 6.1.115), packaged as a `git am`-able mailbox series
+pinned to an exact commit.
 
 They fix one thing: **HDMI-RX audio capture, which the vendor kernel regressed.**
 
 | | |
 |---|---|
 | **Target kernel** | `armbian/linux-rockchip` branch `rk-6.1-rkr5.1` @ `95e85f6cb496c75807c5b16f158853578e7e7d1b` |
-| **Which package that is** | `linux-image-vendor-rk35xx` **6.1.115** — what the shipped image installs |
+| **Which package that is** | `linux-image-vendor-rk35xx` **6.1.115** — the Armbian vendor BSP kernel package. CeraLive images shipped it until the move to the mainline `edge` 7.2 track; anyone still building vendor-kernel images installs it |
 | **Why that commit** | Its timestamp matches the board's kernel build stamp to the second — derived in [`docs/PREFLIGHT.md`](docs/PREFLIGHT.md) |
-| **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`, both on this kernel) |
+| **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`) |
 | **Patch sources** | `upstream/` from [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487), plus the first-party `ceralive/` lane |
 | **Status** | Applies cleanly, gate is green. `0001`-`0003` are built and board-tested; `0004` is retained as diagnostic instrumentation; and `0005` is board-confirmed on one Radxa ROCK 5B+ test with the evidence recorded below. |
 

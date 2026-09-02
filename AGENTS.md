@@ -1,21 +1,33 @@
 # rk3588-vendor-kernel-patches
 
-> **NOT CURRENTLY IN PRODUCTION USE (2026-08-29)** — The project owner has confirmed
-> ([`rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches),
-> `edge` v7.2 track) as the permanent production kernel after hands-on testing on
-> the bench devices. This repository's vendor 6.1 BSP patch series is therefore
-> not used by the shipped image today, but it remains active and unarchived because
-> the patches are useful reference material for the vendor 6.1 BSP track and a
-> documented real fix for a real upstream regression. See the CeraLive workspace plan
-> `cerastream-glibc-pipewire-network-ui`.
+> ## Preserved, not retired — and open for contributions
+>
+> **This patch series is no longer consumed by CeraLive's image-building pipeline.**
+> The shipped CeraLive image runs the mainline / Armbian `edge` 7.2 kernel, whose patch
+> series lives in the sibling repository
+> [`CERALIVE/rk3588-kernel-patches`](https://github.com/CERALIVE/rk3588-kernel-patches).
+> The project owner confirmed that track as the permanent production kernel after
+> hands-on testing on the bench devices.
+>
+> **This repository is deliberately preserved, and it stays fully active.** It is not
+> archived, not frozen, and not read-only. What it carries is a documented,
+> board-confirmed repair for a real upstream regression on the Armbian vendor 6.1 BSP
+> kernel — and those fixes remain valuable to anyone building their own custom
+> vendor-kernel images. CeraLive moving its own production images to the mainline track
+> does not make the vendor track any less broken for the people still building on it.
+>
+> **Contributions and pull requests remain welcome here.** Issues, patch improvements,
+> pin bumps, and board reports are all still accepted.
+>
+> Background: the CeraLive workspace plan `cerastream-glibc-pipewire-network-ui`.
 
 ## ROLE IN THE GROUP
 
 Holds the **vendor-track RK3588 kernel patch series** for CeraLive: two backports
 that restore HDMI-RX audio capture on the Armbian vendor BSP kernel
-(`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — the kernel the shipped
-CeraLive image actually runs — plus two first-party patches: a DMA-budget fix
-a diagnostic instrumentation patch, and the first-party fix it led to.
+(`rk-6.1-rkr5.1`, `linux-image-vendor-rk35xx` 6.1.115) — plus two first-party
+patches: a DMA-budget fix, a diagnostic instrumentation patch, and the
+first-party fix it led to.
 
 Produces **patch text only** — no `.deb`, no kernel, no image artifact. It is
 therefore **NOT in the device image `REPOS` array** and has **no `versions.yaml`
@@ -23,11 +35,11 @@ pin**, for the same reason `ceralive-infra` has none: there is nothing for the
 image pipeline to fetch.
 
 Relates to:
-- `image-building-pipeline/` — the intended downstream consumer. A future
-  vendor-kernel-build-from-source stage sources `kernel-pin.env`. Nothing is
-  wired up yet; the shipped image is unaffected (see KEY FACTS).
-- `cerastream/` — the consumer of the capability this restores. HDMI-RX embedded
-  audio is unreachable on the shipped kernel without this series.
+- `image-building-pipeline/` — **not a consumer.** CeraLive's pipeline builds the
+  mainline `edge` 7.2 kernel and never sourced `kernel-pin.env`. A third party
+  building their own vendor-kernel images is the audience for that file.
+- `cerastream/` — the consumer of the capability this restores. On a vendor 6.1
+  BSP kernel, HDMI-RX embedded audio is unreachable without this series.
 - `CERALIVE/rk3588-kernel-patches` — the **sibling, not the parent**. See below.
 
 Patch source: [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487),
@@ -44,7 +56,7 @@ Two patch packages, two kernels, no overlap. Getting this wrong wastes a day.
 |---|---|---|
 | Kernel track | mainline / Armbian `edge` | Armbian `vendor` BSP |
 | Kernel | `v7.1.5` (a tag on `linux-7.1.y`) | `rk-6.1-rkr5.1` @ `95e85f6c` (a commit; branch has no tags) |
-| Package | none shipped | `linux-image-vendor-rk35xx` 6.1.115 — **what the image runs today** |
+| Package | none shipped | `linux-image-vendor-rk35xx` 6.1.115 |
 | Contents | VEPU580 encoder + 3 HDMI-RX fixes + first-party DT sound card | 2 ASoC hdmi-codec backports + 2 first-party patches |
 | Source shape | raw `diff -ruN`, no mail headers | `git format-patch` mailboxes |
 | Needs a rebase engine? | yes (moving tag, different base kernel) | **no** (fixed commit, applies clean) |

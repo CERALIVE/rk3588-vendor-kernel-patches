@@ -84,8 +84,8 @@ The Debian package name:
 	create_kernel_deb "linux-image-${BRANCH}-${LINUXFAMILY}" ...
 ```
 
-→ **`linux-image-vendor-rk35xx`**, which is exactly the package the shipped
-CeraLive image installs.
+→ **`linux-image-vendor-rk35xx`**, which is exactly the package an Armbian
+`BRANCH=vendor` build installs on this family.
 
 **4. `lib/functions/artifacts/artifact-kernel.sh`** — line 95
 
@@ -192,14 +192,17 @@ handled deliberately.
 
 ## Relationship to the shipped image
 
-Unlike the mainline sibling repo, this one targets **exactly the kernel the
-shipped CeraLive image runs today**: the Armbian vendor BSP,
-`linux-image-vendor-rk35xx` 6.1.115, per image-pipeline Decision D3.
+**No longer a relationship at all, and that is the point of this section.** When
+this derivation was written, the shipped CeraLive image ran the Armbian vendor
+BSP (`linux-image-vendor-rk35xx` 6.1.115, per image-pipeline Decision D3), so the
+mapping below was aimed at the kernel on the production board. CeraLive has since
+moved its production images to the mainline / Armbian `edge` 7.2 track, and the
+pipeline no longer builds a vendor kernel at all.
 
-That makes it the higher-stakes of the two patch packages and also the more
-directly useful one — the regression it fixes is not theoretical, it is on the
-board right now.
+The derivation itself is unaffected — it resolves `BOARDFAMILY` → `KERNELBRANCH` →
+package name → patch directory out of `armbian/build`'s own sources, and that
+resolution is still exactly how an Armbian `BRANCH=vendor` build behaves for
+anyone doing one. What changed is who that person is: no longer CeraLive's
+pipeline, but whoever is building their own custom vendor-kernel image.
 
-It does **not**, however, change the shipped image on its own. Nothing here
-builds a kernel or produces a `.deb`. Wiring this series into
-`image-building-pipeline`'s vendor-kernel build is separate, unfinished work.
+Nothing here builds a kernel or produces a `.deb` either way.
