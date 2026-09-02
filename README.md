@@ -21,18 +21,18 @@
 >
 > Background: the CeraLive workspace plan `cerastream-glibc-pipewire-network-ui`.
 
-Out-of-tree patches for the **Armbian vendor BSP kernel** the shipped CeraLive
-image actually runs, packaged as a `git am`-able mailbox series pinned to an
-exact commit.
+Out-of-tree patches for the **Armbian vendor BSP kernel**
+(`linux-image-vendor-rk35xx` 6.1.115), packaged as a `git am`-able mailbox series
+pinned to an exact commit.
 
 They fix one thing: **HDMI-RX audio capture, which the vendor kernel regressed.**
 
 | | |
 |---|---|
 | **Target kernel** | `armbian/linux-rockchip` branch `rk-6.1-rkr5.1` @ `95e85f6cb496c75807c5b16f158853578e7e7d1b` |
-| **Which package that is** | `linux-image-vendor-rk35xx` **6.1.115** — what the shipped image installs |
+| **Which package that is** | `linux-image-vendor-rk35xx` **6.1.115** — the Armbian vendor BSP kernel package. CeraLive images shipped it until the move to the mainline `edge` 7.2 track; anyone still building vendor-kernel images installs it |
 | **Why that commit** | Its timestamp matches the board's kernel build stamp to the second — derived in [`docs/PREFLIGHT.md`](docs/PREFLIGHT.md) |
-| **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`, both on this kernel) |
+| **Boards** | Radxa Rock 5B+, Orange Pi 5+ (both `BOARDFAMILY=rockchip-rk3588`) |
 | **Patch sources** | `upstream/` from [`armbian/linux-rockchip` PR #487](https://github.com/armbian/linux-rockchip/pull/487), plus the first-party `ceralive/` lane |
 | **Status** | Applies cleanly, gate is green. `0001`-`0003` are built and board-tested; `0004` is retained as diagnostic instrumentation; and `0005` is board-confirmed on one Radxa ROCK 5B+ test with the evidence recorded below. |
 
